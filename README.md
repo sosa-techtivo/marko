@@ -2,6 +2,28 @@
 
 MARKO is an AI-powered SEO marketing agent. This repository currently contains the SaaS account/auth foundation the SEO product will be built on — see `PROJECT_STATUS.md` for current scope.
 
+## What is MARKO?
+
+MARKO is an AI-powered marketing agent designed to help businesses understand
+and improve their digital presence.
+
+The first MARKO agent focuses on SEO. It analyzes websites, identifies technical
+and content opportunities, tracks improvements over time, and turns SEO data
+into clear, actionable reports.
+
+### Current MVP scope
+
+The first version focuses on:
+
+- Website crawling and technical SEO analysis
+- SEO health and issue detection
+- Actionable optimization opportunities
+- Progress tracking over time
+- Reporting focused on measurable improvement
+
+MARKO is intentionally starting narrow: become useful at SEO before expanding
+into additional marketing agents.
+
 ## Stack
 
 - Next.js (App Router, TypeScript)
