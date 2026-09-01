@@ -104,6 +104,14 @@ export default async function DashboardPage({
         </Link>
       </div>
 
+      {error && (
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error === "site-not-found"
+            ? "That site could not be found."
+            : "Something went wrong. Please try again."}
+        </p>
+      )}
+
       {!sites || sites.length === 0 ? (
         <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-16 text-center">
           <p className="text-sm font-medium text-zinc-900">No sites yet</p>
@@ -120,11 +128,16 @@ export default async function DashboardPage({
       ) : (
         <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white">
           {sites.map((site) => (
-            <li key={site.id} className="flex items-center justify-between px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-zinc-900">{site.name}</p>
-                <p className="text-sm text-zinc-500">{site.url}</p>
-              </div>
+            <li key={site.id}>
+              <Link
+                href={`/dashboard/sites/${site.id}`}
+                className="flex items-center justify-between px-4 py-3 hover:bg-zinc-50"
+              >
+                <div>
+                  <p className="text-sm font-medium text-zinc-900">{site.name}</p>
+                  <p className="text-sm text-zinc-500">{site.url}</p>
+                </div>
+              </Link>
             </li>
           ))}
         </ul>
