@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUserAndOrganization } from "@/lib/organizations";
 import { runSeoAnalysis } from "./actions";
 import { buildSeoHealthReport } from "@/lib/reporting/seoHealthReport";
+import { buildSeoChangeReport, type ChangedIssue } from "@/lib/reporting/seoChangeReport";
 import {
   CATEGORY_LABELS,
   PRIORITY_LABELS,
@@ -78,6 +79,17 @@ function SummaryStat({ label, value }: { label: string; value: number }) {
       <p className="text-2xl font-semibold text-zinc-900">{value}</p>
       <p className="text-xs text-zinc-500">{label}</p>
     </div>
+  );
+}
+
+function ChangedIssueRow({ issue }: { issue: ChangedIssue }) {
+  return (
+    <li className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
+      <PriorityBadge priority={issue.priority} />
+      <CategoryBadge category={issue.category} />
+      <span className="font-medium text-zinc-900">{issue.label}</span>
+      <span className="max-w-xs truncate text-xs text-zinc-500">{issue.url}</span>
+    </li>
   );
 }
 
@@ -165,6 +177,61 @@ export default async function SiteDetailPage({
   const healthReport =
     latestRun?.status === "completed"
       ? buildSeoHealthReport(crawlPages ?? [], crawlIssues ?? [])
+      : null;
+
+  // Independent of `latestRun` above (which may be running/failed): the
+  // comparison is always between the two most recent *completed* runs, per
+  // Milestone 4.
+  const { data: completedRuns } = await supabase
+    .from("crawl_runs")
+    .select("id, started_at")
+    .eq("site_id", site.id)
+    .eq("status", "completed")
+    .order("started_at", { ascending: false })
+    .limit(2);
+
+  const latestCompletedRun = completedRuns?.[0] ?? null;
+  const previousCompletedRun = completedRuns?.[1] ?? null;
+
+  const { data: comparisonPages } = latestCompletedRun && previousCompletedRun
+    ? await supabase
+        .from("crawl_pages")
+        .select("id, crawl_run_id, url, http_status, fetch_error")
+        .in("crawl_run_id", [latestCompletedRun.id, previousCompletedRun.id])
+    : { data: null };
+
+  const { data: comparisonIssues } = latestCompletedRun && previousCompletedRun
+    ? await supabase
+        .from("crawl_issues")
+        .select("crawl_run_id, crawl_page_id, issue_type")
+        .in("crawl_run_id", [latestCompletedRun.id, previousCompletedRun.id])
+    : { data: null };
+
+  const changeReport = latestCompletedRun
+    ? buildSeoChangeReport({
+        latestRun: { id: latestCompletedRun.id, startedAt: latestCompletedRun.started_at },
+        previousRun: previousCompletedRun
+          ? { id: previousCompletedRun.id, startedAt: previousCompletedRun.started_at }
+          : null,
+        pages: comparisonPages ?? [],
+        issues: comparisonIssues ?? [],
+      })
+    : null;
+
+  const changeSummaryMessage =
+    changeReport?.status === "compared"
+      ? changeReport.summary.resolvedCount === 0 && changeReport.summary.newCount === 0
+        ? "No SEO issue changes detected since the previous analysis."
+        : [
+            changeReport.summary.resolvedCount > 0
+              ? `${changeReport.summary.resolvedCount} issue${changeReport.summary.resolvedCount === 1 ? "" : "s"} resolved`
+              : null,
+            changeReport.summary.newCount > 0
+              ? `${changeReport.summary.newCount} new issue${changeReport.summary.newCount === 1 ? "" : "s"}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")
       : null;
 
   return (
@@ -305,6 +372,92 @@ export default async function SiteDetailPage({
                   </ul>
                 </div>
               ))}
+            </div>
+          )}
+
+          {changeReport && (
+            <div className="rounded-lg border border-zinc-200 bg-white p-4">
+              <h2 className="text-sm font-semibold text-zinc-900">Changes Since Last Analysis</h2>
+
+              {changeReport.status === "no-previous-run" ? (
+                <p className="mt-2 text-sm text-zinc-600">
+                  No previous analysis is available for comparison yet. This is the first
+                  completed crawl for this site.
+                </p>
+              ) : (
+                <>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Comparing {new Date(changeReport.previousRun.startedAt).toLocaleString()} to{" "}
+                    {new Date(changeReport.latestRun.startedAt).toLocaleString()}. Results reflect
+                    only the pages measured by those two crawls.
+                  </p>
+
+                  <p className="mt-3 text-sm font-medium text-zinc-900">{changeSummaryMessage}</p>
+
+                  <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                    <SummaryStat label="Resolved" value={changeReport.summary.resolvedCount} />
+                    <SummaryStat label="New" value={changeReport.summary.newCount} />
+                    <SummaryStat label="Remaining" value={changeReport.summary.remainingCount} />
+                    <div className="flex flex-col gap-1">
+                      <p className="text-2xl font-semibold text-zinc-900">
+                        {changeReport.summary.previousPagesWithIssues} →{" "}
+                        {changeReport.summary.currentPagesWithIssues}
+                      </p>
+                      <p className="text-xs text-zinc-500">Pages with issues</p>
+                    </div>
+                  </div>
+
+                  {changeReport.summary.excludedPreviousIssueCount > 0 && (
+                    <p className="mt-3 text-xs text-zinc-500">
+                      {changeReport.summary.excludedPreviousIssueCount} previously-flagged issue
+                      {changeReport.summary.excludedPreviousIssueCount === 1 ? "" : "s"} on page
+                      {changeReport.summary.excludedPreviousIssueCount === 1 ? "" : "s"} not
+                      successfully re-analyzed in this crawl{" "}
+                      {changeReport.summary.excludedPreviousIssueCount === 1 ? "is" : "are"}{" "}
+                      excluded from this comparison — not counted as resolved.
+                    </p>
+                  )}
+
+                  {changeReport.resolved.length > 0 && (
+                    <div className="mt-4">
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                        Resolved
+                      </h3>
+                      <ul className="mt-1 divide-y divide-zinc-100">
+                        {changeReport.resolved.map((issue) => (
+                          <ChangedIssueRow key={`${issue.issueType}-${issue.url}`} issue={issue} />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {changeReport.newIssues.length > 0 && (
+                    <div className="mt-4">
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                        New
+                      </h3>
+                      <ul className="mt-1 divide-y divide-zinc-100">
+                        {changeReport.newIssues.map((issue) => (
+                          <ChangedIssueRow key={`${issue.issueType}-${issue.url}`} issue={issue} />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {changeReport.remaining.length > 0 && (
+                    <div className="mt-4">
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                        Remaining
+                      </h3>
+                      <ul className="mt-1 divide-y divide-zinc-100">
+                        {changeReport.remaining.map((issue) => (
+                          <ChangedIssueRow key={`${issue.issueType}-${issue.url}`} issue={issue} />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
 

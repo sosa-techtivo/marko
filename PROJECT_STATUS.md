@@ -6,10 +6,12 @@ Per `CLAUDE.md`, the confirmed MVP is an SEO analysis/reporting product for
 real websites, demonstrable around September 10–15, 2026. This checkpoint
 covers the SaaS account/auth foundation, **Milestone 2: a first end-to-end
 SEO crawl vertical slice** (manual crawl → deterministic findings →
-persisted history → dashboard summary), and **Milestone 3: SEO Health &
+persisted history → dashboard summary), **Milestone 3: SEO Health &
 Opportunities** (deterministic category/priority classification →
-grouped, prioritized opportunities → plain-language health summary).
-Search Console and historical trend reporting are still not implemented.
+grouped, prioritized opportunities → plain-language health summary), and
+**Milestone 4: Historical SEO Changes** (deterministic latest-vs-previous
+comparison → resolved/new/remaining issues). Search Console is still not
+implemented.
 
 ## Completed functionality
 
@@ -117,6 +119,36 @@ Search Console and historical trend reporting are still not implemented.
   a score, never "perfect SEO," and explicitly scoped to what that crawl
   measured
 
+### Historical SEO Changes (Milestone 4)
+- `/dashboard/sites/[siteId]` now renders a **Changes Since Last Analysis**
+  section comparing the two most recent *completed* crawl runs (not
+  necessarily the same as the overall latest run shown at the top of the
+  page, which can be `running`/`failed`) — derived entirely from existing
+  `crawl_runs`/`crawl_pages`/`crawl_issues` rows, no schema change
+  (`src/lib/reporting/seoChangeReport.ts`)
+- Each `(page URL, issue_type)` pair is classified as **Resolved** (in the
+  previous run, absent now), **New** (absent previously, present now), or
+  **Remaining** (in both) — reusing `issueTaxonomy.ts` for each item's
+  category/priority rather than redefining it
+- Resolved is deliberately conservative: the crawler analyzes at most 5
+  pages and which pages get crawled can change run to run (link discovery
+  on the start page isn't guaranteed stable), so a previous issue is only
+  ever counted Resolved if its page URL was *also successfully
+  re-analyzed* in the current run (present in the current run's pages,
+  2xx status, no fetch error). If the page wasn't re-crawled, or was
+  re-crawled but failed to fetch, that previous issue is excluded from
+  the comparison entirely (never silently counted as fixed) and the
+  excluded count is surfaced as a factual note
+- The Change Summary is counts only — "N issues resolved · N new issues"
+  or "No SEO issue changes detected since the previous analysis" — the UI
+  never labels the result an "improvement" or invents a percentage/score
+- First completed crawl for a site: the section explicitly states no
+  previous analysis is available yet, with no empty Resolved/New/Remaining
+  sections shown
+- The comparison always states which two runs (by timestamp) are being
+  compared and that results reflect only the pages those two crawls
+  actually measured
+
 ## Current architecture
 
 - Generic account/tenant infrastructure (`organizations`,
@@ -134,12 +166,15 @@ Search Console and historical trend reporting are still not implemented.
 - No org-switcher UI exists yet — the app currently operates on the user's
   first (earliest-created) organization membership. The schema already
   supports multiple memberships per user.
-- The health/opportunities report (`src/lib/reporting/`) is a pure,
-  dependency-free layer on top of the persisted crawl data — no new
+- The health/opportunities/change reports (`src/lib/reporting/`) are pure,
+  dependency-free layers on top of the persisted crawl data — no new
   tables, no new queries beyond widening the existing `crawl_pages`
-  `select`. It is deliberately separate from `src/lib/crawler/` (raw
-  fetch/detect) so the classification rules can evolve without touching
-  crawl logic.
+  `select` (Milestone 3) and two additional `select`s scoped to the two
+  most recent completed run IDs (Milestone 4). Deliberately separate from
+  `src/lib/crawler/` (raw fetch/detect) so classification/comparison rules
+  can evolve without touching crawl logic. `issueTaxonomy.ts` is the one
+  place category/priority are defined; both the health report and the
+  change report import it rather than redefining anything.
 
 ## Known limitations
 
@@ -162,24 +197,30 @@ Search Console and historical trend reporting are still not implemented.
   status and on-page `<meta name="robots">` / `X-Robots-Tag`.
 - Crawl history has no pruning/retention policy yet — every run is kept
   indefinitely.
-- The health report reflects only the single latest completed crawl — no
-  historical trend/progress-over-time comparison yet (explicitly deferred
-  to the next milestone).
 - Opportunities are grouped by `issue_type` only; if the same issue type
   has meaningfully different messages across pages (e.g. different HTTP
   status codes for `http_error`), the group still shows one shared
   "why it matters"/"what to review" with each page's own specific message
   listed underneath — not split into separate cards per message variant.
+- The Changes Since Last Analysis comparison only ever looks at the two
+  most recent *completed* runs — it does not show a longer trend/history
+  across more than two runs yet (that would be a further milestone, not
+  requested here).
+- A previous issue on a page that wasn't successfully re-crawled this run
+  is excluded from the comparison rather than shown as "unknown"/"stale"
+  in its own bucket — surfaced only as a count in a short note, not as
+  individual line items. This keeps the UI to the three sections actually
+  requested (Resolved/New/Remaining) without inventing a fourth.
 
 ## Deferred scope (explicitly out of this checkpoint)
 
 Google Search Console/GA4/GBP integration, GEO monitoring, AI-assisted
-analysis, 0–100 SEO health scoring, structured-data validation, historical
-trend/progress reporting, ticketing, Developer Agent, auto-fixes, and any
-mock/fake analytics. See `CLAUDE.md` for the full list.
+analysis, 0–100 SEO health scoring, structured-data validation, multi-run
+(more than two) trend reporting, ticketing, Developer Agent, auto-fixes,
+and any mock/fake analytics. See `CLAUDE.md` for the full list.
 
 ## Next logical milestone
 
-Historical tracking: preserve/compare health summaries across runs to show
-whether SEO health is improving over time, before introducing Google Search
-Console data.
+Google Search Console integration: authorize per-site access via OAuth and
+use performance data (clicks/impressions/CTR/position) to enrich
+prioritization and reporting, per CLAUDE.md's Search Console section.
