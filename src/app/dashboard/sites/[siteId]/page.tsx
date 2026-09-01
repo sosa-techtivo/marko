@@ -232,7 +232,7 @@ export default async function SiteDetailPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <Link href="/dashboard" className="text-sm text-zinc-500 hover:text-zinc-700">
+      <Link href="/dashboard" className="text-sm text-zinc-500 hover:text-primary-strong">
         ← Back to sites
       </Link>
 
@@ -245,7 +245,7 @@ export default async function SiteDetailPage({
           <input type="hidden" name="siteId" value={site.id} />
           <button
             type="submit"
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
           >
             Run SEO analysis
           </button>
