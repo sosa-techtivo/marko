@@ -47,13 +47,15 @@ Create a project at [supabase.com](https://supabase.com) (or use an existing one
 In the Supabase dashboard, open **SQL Editor** and run the files in
 `supabase/migrations/` **in order** (`0001_init.sql`, then
 `0002_grant_authenticated_table_privileges.sql`, then
-`0003_seo_crawl.sql`). Together they create:
+`0003_seo_crawl.sql`, then `0004_seo_rules_expansion.sql`). Together they
+create:
 
 - `organizations`, `organization_memberships`, `sites` tables
 - Row Level Security policies scoping all access to the caller's organization memberships
 - A `create_organization` database function — the only way to create an organization; it atomically creates the organization and the caller's membership row
 - The base `authenticated` table grants PostgREST requires to reach those RLS policies at all (only needed if your project has "Automatically expose new tables" disabled in Studio — plain SQL migrations don't grant those automatically the way the table-editor GUI does)
 - `crawl_runs`, `crawl_pages`, `crawl_issues` — historical SEO crawl runs and their results, same RLS + grant pattern
+- `0004` widens `crawl_issues.issue_type`'s check constraint for the expanded set of deterministic SEO rules (title/meta length, duplicates, multiple H1s, canonical checks)
 
 If you use the [Supabase CLI](https://supabase.com/docs/guides/cli) instead:
 

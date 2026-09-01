@@ -1,12 +1,27 @@
 import type { FetchedPage } from "./fetchPage";
+import {
+  META_DESCRIPTION_MAX_LENGTH,
+  META_DESCRIPTION_MIN_LENGTH,
+  TITLE_MAX_LENGTH,
+  TITLE_MIN_LENGTH,
+} from "./seoRules";
 
 export type CrawlIssueType =
   | "http_error"
   | "missing_title"
+  | "title_too_short"
+  | "title_too_long"
+  | "duplicate_title"
   | "missing_meta_description"
+  | "meta_description_too_short"
+  | "meta_description_too_long"
+  | "duplicate_meta_description"
   | "missing_h1"
+  | "multiple_h1"
   | "non_indexable"
-  | "invalid_canonical";
+  | "invalid_canonical"
+  | "missing_canonical"
+  | "duplicate_canonical";
 
 export type CrawlIssueSeverity = "warning" | "critical";
 
@@ -78,10 +93,20 @@ export function analyzePage(params: {
   metaRobots: string | null;
   rawCanonicalHref: string | null;
   h1: string | null;
+  h1Count: number;
   internalLinkCount: number;
 }): AnalyzedPage {
-  const { url, fetched, title, metaDescription, metaRobots, rawCanonicalHref, h1, internalLinkCount } =
-    params;
+  const {
+    url,
+    fetched,
+    title,
+    metaDescription,
+    metaRobots,
+    rawCanonicalHref,
+    h1,
+    h1Count,
+    internalLinkCount,
+  } = params;
 
   const issues: CrawlIssue[] = [];
   const httpStatus = fetched.status;
@@ -114,6 +139,18 @@ export function analyzePage(params: {
         message:
           "This page has no <title> tag. Search engines use it as the primary link text in results — add a unique, descriptive title.",
       });
+    } else if (title.length < TITLE_MIN_LENGTH) {
+      issues.push({
+        type: "title_too_short",
+        severity: "warning",
+        message: `This page's title is ${title.length} characters, shorter than the recommended minimum of ${TITLE_MIN_LENGTH}. A brief title may not fully describe the page to search engines and searchers.`,
+      });
+    } else if (title.length > TITLE_MAX_LENGTH) {
+      issues.push({
+        type: "title_too_long",
+        severity: "warning",
+        message: `This page's title is ${title.length} characters, longer than the recommended maximum of ${TITLE_MAX_LENGTH}. Search engines may truncate it in search results.`,
+      });
     }
 
     if (!metaDescription) {
@@ -123,6 +160,18 @@ export function analyzePage(params: {
         message:
           "This page has no meta description. Add one to control how it's summarized in search results.",
       });
+    } else if (metaDescription.length < META_DESCRIPTION_MIN_LENGTH) {
+      issues.push({
+        type: "meta_description_too_short",
+        severity: "warning",
+        message: `This page's meta description is ${metaDescription.length} characters, shorter than the recommended minimum of ${META_DESCRIPTION_MIN_LENGTH}.`,
+      });
+    } else if (metaDescription.length > META_DESCRIPTION_MAX_LENGTH) {
+      issues.push({
+        type: "meta_description_too_long",
+        severity: "warning",
+        message: `This page's meta description is ${metaDescription.length} characters, longer than the recommended maximum of ${META_DESCRIPTION_MAX_LENGTH}. Search engines may truncate it in search results.`,
+      });
     }
 
     if (!h1) {
@@ -130,6 +179,14 @@ export function analyzePage(params: {
         type: "missing_h1",
         severity: "warning",
         message: "This page has no <h1> heading. Add one to signal the page's main topic clearly.",
+      });
+    }
+
+    if (h1Count > 1) {
+      issues.push({
+        type: "multiple_h1",
+        severity: "warning",
+        message: `This page has ${h1Count} <h1> headings. Using more than one can make it unclear which heading represents the page's main topic.`,
       });
     }
 
@@ -143,6 +200,13 @@ export function analyzePage(params: {
 
     if (canonicalIssue) {
       issues.push({ type: "invalid_canonical", severity: "warning", message: canonicalIssue });
+    } else if (rawCanonicalHref === null) {
+      issues.push({
+        type: "missing_canonical",
+        severity: "warning",
+        message:
+          "This page has no canonical tag. Without one, search engines must infer the authoritative URL themselves, which matters if this page is reachable through more than one URL.",
+      });
     }
   }
 

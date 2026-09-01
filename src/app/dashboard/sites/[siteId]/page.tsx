@@ -7,6 +7,7 @@ import { buildSeoHealthReport } from "@/lib/reporting/seoHealthReport";
 import { buildSeoChangeReport, type ChangedIssue } from "@/lib/reporting/seoChangeReport";
 import {
   CATEGORY_LABELS,
+  ISSUE_TAXONOMY,
   PRIORITY_LABELS,
   type IssueCategory,
   type IssuePriority,
@@ -17,14 +18,9 @@ import {
 // timeout enough headroom to not cut a legitimate crawl short.
 export const maxDuration = 60;
 
-const ISSUE_LABELS: Record<string, string> = {
-  http_error: "HTTP error",
-  missing_title: "Missing title",
-  missing_meta_description: "Missing meta description",
-  missing_h1: "Missing H1",
-  non_indexable: "Non-indexable",
-  invalid_canonical: "Invalid canonical",
-};
+function issueLabel(issueType: string): string {
+  return (ISSUE_TAXONOMY as Record<string, { label: string }>)[issueType]?.label ?? issueType;
+}
 
 function IssueBadge({
   issueType,
@@ -45,7 +41,7 @@ function IssueBadge({
       title={message}
       className={`inline-block rounded-md border px-2 py-0.5 text-xs font-medium ${colors}`}
     >
-      {ISSUE_LABELS[issueType] ?? issueType}
+      {issueLabel(issueType)}
     </span>
   );
 }

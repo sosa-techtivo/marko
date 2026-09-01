@@ -10,8 +10,10 @@ persisted history → dashboard summary), **Milestone 3: SEO Health &
 Opportunities** (deterministic category/priority classification →
 grouped, prioritized opportunities → plain-language health summary), and
 **Milestone 4: Historical SEO Changes** (deterministic latest-vs-previous
-comparison → resolved/new/remaining issues). Search Console is still not
-implemented.
+comparison → resolved/new/remaining issues), and **Milestone 5: Expanded
+Deterministic SEO Rules** (9 additional page-level and cross-page checks —
+title/meta length and duplicates, multiple H1s, missing/unexpectedly-shared
+canonicals). Search Console is still not implemented.
 
 ## Completed functionality
 
@@ -67,9 +69,9 @@ implemented.
   `src/lib/crawler/html.ts` rather than a DOM-parsing library
 - Deterministic issue detection only (no AI/LLM calls) — `http_error`,
   `missing_title`, `missing_meta_description`, `missing_h1`,
-  `non_indexable`, `invalid_canonical` — each with a fixed severity
-  (`critical`/`warning`) and a plain-language message
-  (`src/lib/crawler/analyze.ts`)
+  `non_indexable`, `invalid_canonical`, plus 9 more added in Milestone 5 —
+  each with a fixed severity (`critical`/`warning`) and a plain-language
+  message (`src/lib/crawler/analyze.ts`)
 - Runs synchronously inside one Server Action request (`runSeoAnalysis` in
   `src/app/dashboard/sites/[siteId]/actions.ts`) — no queue, no background
   job, no scheduling
@@ -108,6 +110,8 @@ implemented.
   | `missing_meta_description` | Metadata | Medium |
   | `invalid_canonical` | Indexability | Medium |
   | `missing_h1` | Structure | Low |
+
+  (extended further in Milestone 5 — see that section below)
 - Opportunities are grouped by issue type across pages (one card per issue
   type, not one card per page × issue), sorted by priority then by number
   of affected pages, and each card states what was detected, the affected
@@ -149,17 +153,76 @@ implemented.
   compared and that results reflect only the pages those two crawls
   actually measured
 
+### Expanded Deterministic SEO Rules (Milestone 5, `supabase/migrations/0004_seo_rules_expansion.sql`)
+- 9 new deterministic issue types, all still no-AI/rule-based, extending
+  (not replacing) the 6 from Milestone 2:
+  | issue_type | category | priority | check |
+  |---|---|---|---|
+  | `title_too_short` | Metadata | Medium | title present but < 30 chars |
+  | `title_too_long` | Metadata | Medium | title present but > 60 chars |
+  | `duplicate_title` | Metadata | Medium | 2+ crawled pages share the same normalized title (cross-page) |
+  | `meta_description_too_short` | Metadata | Low | meta description present but < 50 chars |
+  | `meta_description_too_long` | Metadata | Low | meta description present but > 160 chars |
+  | `duplicate_meta_description` | Metadata | Medium | 2+ crawled pages share the same normalized meta description (cross-page) |
+  | `multiple_h1` | Structure | Medium | page has more than one `<h1>` element |
+  | `missing_canonical` | Indexability | Low | page has no canonical tag at all (distinct from `invalid_canonical`, which covers empty/unparsable/cross-domain) |
+  | `duplicate_canonical` | Indexability | Medium | 2+ *other*, non-self-referencing crawled pages declare the same valid canonical target (cross-page; `duplicate_canonical`'s priority isn't from an explicit spec — inferred as the same tier as `invalid_canonical`) |
+- Title/meta description length thresholds are conventional, deterministic,
+  and centralized as exported constants in `src/lib/crawler/analyze.ts`
+  (`TITLE_MIN_LENGTH = 30`, `TITLE_MAX_LENGTH = 60`,
+  `META_DESCRIPTION_MIN_LENGTH = 50`, `META_DESCRIPTION_MAX_LENGTH = 160`),
+  reused by `issueTaxonomy.ts` for the recommendation copy rather than
+  restated
+- Architecture: page-level checks (length, missing-canonical, multiple-H1)
+  stay in `analyzePage` (`src/lib/crawler/analyze.ts`), unaware of other
+  pages. Cross-page checks (the three duplicate/consolidation rules) are a
+  separate pass, `applyCrossPageChecks` in the new
+  `src/lib/crawler/crossPageChecks.ts`, run once over a run's full page set
+  in `runCrawl.ts` after page-level analysis
+- Duplicate title/meta comparison normalizes conservatively (trim, collapse
+  whitespace, lowercase) before comparing — no semantic/similarity
+  judgment — and never flags pages with an empty/missing value (those are
+  already covered by the missing-value rules)
+- `duplicate_canonical` is deliberately narrow: only *valid, same-host*
+  canonicals participate (a page already flagged `invalid_canonical` is
+  excluded, so a broken canonical isn't double-counted); a page whose own
+  URL *is* the shared target is never flagged (that's the ordinary,
+  legitimate "self-referencing canonical hub" pattern); and it only fires
+  when **2 or more** other, distinct pages defer to the same target — one
+  duplicate page deferring to one canonical page is normal, expected
+  canonical usage and is not flagged
+- A redirect-based finding was considered and explicitly **not**
+  implemented: `fetchPage.ts` resolves redirects internally and only ever
+  returns the final response, so no redirect/final-URL data is currently
+  collected or persisted. Adding one would require expanding `fetchPage`'s
+  return contract and a new `crawl_pages` column just to support it, which
+  was out of scope per the milestone brief. No other robots-directive
+  signal beyond the existing `non_indexable` (noindex) check was reliably
+  derivable from already-collected data.
+- All 9 new types automatically participate in SEO Health, Top
+  Opportunities, and Historical Changes with no code changes to
+  `seoHealthReport.ts` or `seoChangeReport.ts` — both are driven entirely
+  by `ISSUE_TAXONOMY` membership, not a hardcoded type list
+- Schema: `crawl_issues.issue_type`'s check constraint needed widening to
+  accept the new values (migration `0004_seo_rules_expansion.sql`, not yet
+  applied remotely) — no new tables or columns; every new rule is derived
+  from data `crawl_pages` already stores
+
 ## Current architecture
 
 - Generic account/tenant infrastructure (`organizations`,
   `organization_memberships`, `sites`, auth) is kept independent of any
   SEO-specific domain logic, so future specialist agents can share it.
 - SEO crawl logic lives entirely under `src/lib/crawler/` (fetch, HTML
-  extraction, and issue analysis are separate, dependency-free, mostly pure
-  modules) and is orchestrated only from
-  `src/app/dashboard/sites/[siteId]/actions.ts` — it does not reach into
-  tenant/auth internals beyond the existing `requireUserAndOrganization()`
-  helper.
+  extraction, page-level issue analysis, and cross-page issue analysis are
+  separate, dependency-free, mostly pure modules) and is orchestrated only
+  from `src/app/dashboard/sites/[siteId]/actions.ts` — it does not reach
+  into tenant/auth internals beyond the existing
+  `requireUserAndOrganization()` helper. Page-level checks
+  (`analyze.ts`) and cross-page/duplicate checks (`crossPageChecks.ts`) are
+  deliberately separate modules with a clear one-way data flow
+  (`runCrawl.ts` runs page-level analysis for every page, then a single
+  cross-page pass over the full set).
 - Auth/session logic lives in `src/lib/supabase/*`; tenant-resolution logic
   (current organization for the signed-in user) lives in
   `src/lib/organizations.ts`.
@@ -211,6 +274,15 @@ implemented.
   in its own bucket — surfaced only as a count in a short note, not as
   individual line items. This keeps the UI to the three sections actually
   requested (Resolved/New/Remaining) without inventing a fourth.
+- No redirect-based finding exists: `fetchPage.ts` follows redirects
+  internally and only exposes the final response, so whether a page
+  redirected (and to where) isn't currently collected or persisted.
+  Adding that would need a `fetchPage`/schema change, which was
+  deliberately out of scope for Milestone 5.
+- `duplicate_title`/`duplicate_meta_description`/`duplicate_canonical` are
+  computed only within a single crawl run's own page set (at most 5
+  pages) — they cannot detect duplicates against pages outside that run's
+  sample.
 
 ## Deferred scope (explicitly out of this checkpoint)
 

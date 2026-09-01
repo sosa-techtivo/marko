@@ -2,11 +2,13 @@ import { fetchPage } from "./fetchPage";
 import {
   extractCanonical,
   extractFirstH1,
+  extractH1Count,
   extractLinkHrefs,
   extractMetaContent,
   extractTitle,
 } from "./html";
 import { analyzePage, type AnalyzedPage } from "./analyze";
+import { applyCrossPageChecks } from "./crossPageChecks";
 
 /**
  * MVP crawl limit: the start URL plus up to this many same-site internal
@@ -88,6 +90,7 @@ async function fetchAndAnalyze(url: string): Promise<AnalyzedPage> {
     metaRobots: html !== null ? extractMetaContent(html, "robots") : null,
     rawCanonicalHref: html !== null ? extractCanonical(html) : null,
     h1: html !== null ? extractFirstH1(html) : null,
+    h1Count: html !== null ? extractH1Count(html) : 0,
     internalLinkCount: html !== null ? resolveInternalLinks(html, new URL(url)).length : 0,
   });
 }
@@ -129,6 +132,7 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
     metaRobots: extractMetaContent(startHtml, "robots"),
     rawCanonicalHref: extractCanonical(startHtml),
     h1: extractFirstH1(startHtml),
+    h1Count: extractH1Count(startHtml),
     internalLinkCount: internalLinks.length,
   });
 
@@ -142,5 +146,5 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
     pages.push(await fetchAndAnalyze(link));
   }
 
-  return { ok: true, pages };
+  return { ok: true, pages: applyCrossPageChecks(pages) };
 }

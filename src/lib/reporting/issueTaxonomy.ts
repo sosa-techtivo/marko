@@ -1,4 +1,10 @@
 import type { CrawlIssueType } from "@/lib/crawler/analyze";
+import {
+  META_DESCRIPTION_MAX_LENGTH,
+  META_DESCRIPTION_MIN_LENGTH,
+  TITLE_MAX_LENGTH,
+  TITLE_MIN_LENGTH,
+} from "@/lib/crawler/seoRules";
 
 /**
  * Deterministic classification of each crawl issue type into a client-facing
@@ -12,10 +18,17 @@ import type { CrawlIssueType } from "@/lib/crawler/analyze";
  * priority levels:
  *  - High: blocks crawling/indexing outright, or removes the page's primary
  *    relevance signal (http_error, non_indexable, missing_title)
- *  - Medium: affects click-through or index consolidation but the page still
- *    indexes normally (missing_meta_description, invalid_canonical)
+ *  - Medium: affects click-through, distinctiveness, or index consolidation
+ *    but the page still indexes normally (missing_meta_description,
+ *    invalid_canonical, title_too_short/too_long, duplicate_title,
+ *    duplicate_meta_description, multiple_h1, duplicate_canonical)
  *  - Low: a structural best practice with the weakest ranking impact
- *    (missing_h1)
+ *    (missing_h1, meta_description_too_short/too_long, missing_canonical)
+ *
+ * `duplicate_canonical`'s priority (Medium) isn't from an explicit external
+ * spec — it's inferred as the same tier as `invalid_canonical`, since both
+ * are canonical-correctness problems and cross-page consolidation is more
+ * consequential than a single missing canonical tag (Low).
  */
 export type IssueCategory = "technical" | "metadata" | "indexability" | "structure";
 export type IssuePriority = "high" | "medium" | "low";
@@ -55,6 +68,29 @@ export const ISSUE_TAXONOMY: Record<CrawlIssueType, IssueTaxonomyEntry> = {
       "The title tag is the main link text search engines show in results and one of the strongest on-page relevance signals.",
     recommendedAction: "Add a unique, descriptive <title> tag to this page.",
   },
+  title_too_short: {
+    category: "metadata",
+    priority: "medium",
+    label: "Title too short",
+    whyItMatters:
+      "A very short title may not give search engines or searchers enough context about what this page covers.",
+    recommendedAction: `Expand the title to roughly ${TITLE_MIN_LENGTH}–${TITLE_MAX_LENGTH} characters while staying accurate to the page's content.`,
+  },
+  title_too_long: {
+    category: "metadata",
+    priority: "medium",
+    label: "Title too long",
+    whyItMatters: "A very long title is often truncated in search results, hiding part of it.",
+    recommendedAction: `Shorten the title to roughly ${TITLE_MIN_LENGTH}–${TITLE_MAX_LENGTH} characters, keeping the most important words near the front.`,
+  },
+  duplicate_title: {
+    category: "metadata",
+    priority: "medium",
+    label: "Duplicate title",
+    whyItMatters:
+      "Identical titles make it harder for search engines, and searchers, to distinguish between these pages.",
+    recommendedAction: "Write a unique, descriptive title for each page.",
+  },
   missing_meta_description: {
     category: "metadata",
     priority: "medium",
@@ -62,6 +98,29 @@ export const ISSUE_TAXONOMY: Record<CrawlIssueType, IssueTaxonomyEntry> = {
     whyItMatters:
       "Without a meta description, search engines auto-generate a snippet, which is often less compelling and can hurt click-through.",
     recommendedAction: "Add a concise, unique meta description that summarizes the page.",
+  },
+  meta_description_too_short: {
+    category: "metadata",
+    priority: "low",
+    label: "Meta description too short",
+    whyItMatters:
+      "A very short meta description gives search engines little to work with when generating a results snippet.",
+    recommendedAction: `Expand the meta description to roughly ${META_DESCRIPTION_MIN_LENGTH}–${META_DESCRIPTION_MAX_LENGTH} characters.`,
+  },
+  meta_description_too_long: {
+    category: "metadata",
+    priority: "low",
+    label: "Meta description too long",
+    whyItMatters: "A very long meta description is often truncated in search results.",
+    recommendedAction: `Shorten the meta description to roughly ${META_DESCRIPTION_MIN_LENGTH}–${META_DESCRIPTION_MAX_LENGTH} characters.`,
+  },
+  duplicate_meta_description: {
+    category: "metadata",
+    priority: "medium",
+    label: "Duplicate meta description",
+    whyItMatters:
+      "Identical meta descriptions reduce the ability to give each page's search snippet distinct, relevant text.",
+    recommendedAction: "Write a unique meta description for each page.",
   },
   invalid_canonical: {
     category: "indexability",
@@ -72,6 +131,23 @@ export const ISSUE_TAXONOMY: Record<CrawlIssueType, IssueTaxonomyEntry> = {
     recommendedAction:
       "Review this page's canonical tag and point it at the correct, intended URL.",
   },
+  missing_canonical: {
+    category: "indexability",
+    priority: "low",
+    label: "Missing canonical tag",
+    whyItMatters:
+      "Without a canonical tag, search engines must infer the authoritative URL themselves, which matters if this page is reachable through more than one URL.",
+    recommendedAction: "Add a self-referencing canonical tag to this page.",
+  },
+  duplicate_canonical: {
+    category: "indexability",
+    priority: "medium",
+    label: "Unexpected canonical consolidation",
+    whyItMatters:
+      "Multiple, otherwise-distinct pages declaring the same canonical target can unexpectedly consolidate them in search results, which may not be intended.",
+    recommendedAction:
+      "Confirm this consolidation is intentional; if these pages should be indexed separately, correct their canonical tags.",
+  },
   missing_h1: {
     category: "structure",
     priority: "low",
@@ -79,6 +155,14 @@ export const ISSUE_TAXONOMY: Record<CrawlIssueType, IssueTaxonomyEntry> = {
     whyItMatters:
       "The H1 heading helps both readers and search engines quickly understand the page's main topic.",
     recommendedAction: "Add a single, descriptive <h1> heading to this page.",
+  },
+  multiple_h1: {
+    category: "structure",
+    priority: "medium",
+    label: "Multiple H1 headings",
+    whyItMatters:
+      "Multiple H1 headings can make it unclear which heading represents the page's single main topic.",
+    recommendedAction: "Use one <h1> for the page's main heading; use <h2>/<h3> for subsections.",
   },
 };
 

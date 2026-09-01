@@ -50,6 +50,11 @@ export function extractFirstH1(html: string): string | null {
   return match ? cleanText(match[1]) : null;
 }
 
+/** Counts actual <h1> elements (including empty ones) — used to detect multiple H1s. */
+export function extractH1Count(html: string): number {
+  return (html.match(/<h1\b[^>]*>[\s\S]*?<\/h1>/gi) ?? []).length;
+}
+
 function findTags(html: string, tagName: string): string[] {
   return html.match(new RegExp(`<${tagName}\\b[^>]*>`, "gi")) ?? [];
 }
