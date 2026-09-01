@@ -3,6 +3,13 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireUserAndOrganization } from "@/lib/organizations";
 import { runSeoAnalysis } from "./actions";
+import { buildSeoHealthReport } from "@/lib/reporting/seoHealthReport";
+import {
+  CATEGORY_LABELS,
+  PRIORITY_LABELS,
+  type IssueCategory,
+  type IssuePriority,
+} from "@/lib/reporting/issueTaxonomy";
 
 // Worst case is MAX_PAGES_PER_CRAWL sequential page fetches, each bounded by
 // fetchPage's own per-page timeout; this gives Vercel's default 10s function
@@ -39,6 +46,38 @@ function IssueBadge({
     >
       {ISSUE_LABELS[issueType] ?? issueType}
     </span>
+  );
+}
+
+function PriorityBadge({ priority }: { priority: IssuePriority }) {
+  const colors =
+    priority === "high"
+      ? "border-red-200 bg-red-50 text-red-700"
+      : priority === "medium"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : "border-zinc-300 bg-zinc-100 text-zinc-600";
+
+  return (
+    <span className={`inline-block rounded-md border px-2 py-0.5 text-xs font-medium ${colors}`}>
+      {PRIORITY_LABELS[priority]} priority
+    </span>
+  );
+}
+
+function CategoryBadge({ category }: { category: IssueCategory }) {
+  return (
+    <span className="inline-block rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-medium text-zinc-500">
+      {CATEGORY_LABELS[category]}
+    </span>
+  );
+}
+
+function SummaryStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-2xl font-semibold text-zinc-900">{value}</p>
+      <p className="text-xs text-zinc-500">{label}</p>
+    </div>
   );
 }
 
@@ -98,7 +137,9 @@ export default async function SiteDetailPage({
   const { data: crawlPages } = latestRun
     ? await supabase
         .from("crawl_pages")
-        .select("id, url, http_status, title, is_indexable")
+        .select(
+          "id, url, http_status, title, meta_description, h1, canonical_url, is_indexable",
+        )
         .eq("crawl_run_id", latestRun.id)
         .order("created_at", { ascending: true })
     : { data: null };
@@ -120,6 +161,11 @@ export default async function SiteDetailPage({
   const pagesAnalyzed = crawlPages?.length ?? 0;
   const issuesFound = crawlIssues?.length ?? 0;
   const criticalIssues = crawlIssues?.filter((issue) => issue.severity === "critical").length ?? 0;
+
+  const healthReport =
+    latestRun?.status === "completed"
+      ? buildSeoHealthReport(crawlPages ?? [], crawlIssues ?? [])
+      : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -183,6 +229,84 @@ export default async function SiteDetailPage({
               </p>
             )}
           </div>
+
+          {healthReport && (
+            <div className="rounded-lg border border-zinc-200 bg-white p-4">
+              <h2 className="text-sm font-semibold text-zinc-900">SEO Health Summary</h2>
+              <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <SummaryStat label="Pages analyzed" value={healthReport.summary.pagesAnalyzed} />
+                <SummaryStat
+                  label="Pages with issues"
+                  value={healthReport.summary.pagesWithIssues}
+                />
+                <SummaryStat
+                  label="High-priority issues"
+                  value={healthReport.summary.highPriorityIssues}
+                />
+                <SummaryStat
+                  label="Total opportunities"
+                  value={healthReport.summary.totalIssues}
+                />
+              </div>
+            </div>
+          )}
+
+          {healthReport && healthReport.opportunities.length === 0 && (
+            <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+              <p className="text-sm font-medium text-green-800">
+                No critical SEO issues were detected in this crawl.
+              </p>
+              {healthReport.positiveSignals.length > 0 && (
+                <ul className="mt-3 flex flex-col gap-1.5">
+                  {healthReport.positiveSignals.map((signal) => (
+                    <li key={signal} className="flex items-start gap-2 text-sm text-green-700">
+                      <span aria-hidden="true">✓</span>
+                      <span>{signal}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-3 text-xs text-green-700">
+                This reflects only what this crawl measured ({healthReport.summary.pagesAnalyzed}{" "}
+                page{healthReport.summary.pagesAnalyzed === 1 ? "" : "s"}) — not a guarantee of
+                overall SEO performance.
+              </p>
+            </div>
+          )}
+
+          {healthReport && healthReport.opportunities.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <h2 className="text-sm font-semibold text-zinc-900">Top Opportunities</h2>
+              {healthReport.opportunities.map((opportunity) => (
+                <div
+                  key={opportunity.issueType}
+                  className="rounded-lg border border-zinc-200 bg-white p-4"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <PriorityBadge priority={opportunity.priority} />
+                    <CategoryBadge category={opportunity.category} />
+                    <h3 className="text-sm font-medium text-zinc-900">{opportunity.label}</h3>
+                    <span className="text-xs text-zinc-500">
+                      {opportunity.affectedPages.length} page
+                      {opportunity.affectedPages.length === 1 ? "" : "s"} affected
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-zinc-600">{opportunity.whyItMatters}</p>
+                  <p className="mt-1 text-sm text-zinc-800">
+                    <span className="font-medium">Review: </span>
+                    {opportunity.recommendedAction}
+                  </p>
+                  <ul className="mt-3 flex flex-col gap-1 border-t border-zinc-100 pt-3">
+                    {opportunity.affectedPages.map((page) => (
+                      <li key={page.url} className="text-xs text-zinc-500">
+                        <span className="text-zinc-700">{page.url}</span> — {page.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
 
           {crawlPages && crawlPages.length > 0 && (
             <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">

@@ -96,7 +96,8 @@ Visit [http://localhost:3000](http://localhost:3000). You'll be redirected to
 `/dashboard`. A new account has no organization yet, so you'll be prompted to
 create one first — after that you can add your first site, open it, and
 click **Run SEO analysis** to crawl it (start URL + up to 4 same-site
-internal links) and see the results.
+internal links) and see an SEO Health Summary and prioritized opportunities
+for what to review first.
 
 ## Scripts
 
