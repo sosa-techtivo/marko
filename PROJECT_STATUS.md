@@ -10,10 +10,13 @@ persisted history → dashboard summary), **Milestone 3: SEO Health &
 Opportunities** (deterministic category/priority classification →
 grouped, prioritized opportunities → plain-language health summary), and
 **Milestone 4: Historical SEO Changes** (deterministic latest-vs-previous
-comparison → resolved/new/remaining issues), and **Milestone 5: Expanded
+comparison → resolved/new/remaining issues), **Milestone 5: Expanded
 Deterministic SEO Rules** (9 additional page-level and cross-page checks —
 title/meta length and duplicates, multiple H1s, missing/unexpectedly-shared
-canonicals). Search Console is still not implemented.
+canonicals), a **UI/UX Branding Foundation** pass (Techtivo/MARKO visual
+identity — logo, color, typography, login/header shell), and **Signup
+Onboarding** (organization name captured at signup, auto-created after
+email verification). Search Console is still not implemented.
 
 ## Completed functionality
 
@@ -208,6 +211,85 @@ canonicals). Search Console is still not implemented.
   applied remotely) — no new tables or columns; every new rule is derived
   from data `crawl_pages` already stores
 
+### UI/UX Branding Foundation (Techtivo/MARKO visual identity)
+- Logo/favicon: `/public/branding/techtivo-marko.png` and `favicon.ico`
+  (provided assets, never generated/modified/renamed) wired through a
+  shared `src/components/MarkoLogo.tsx` component — image on top, "MARKO"
+  as real text underneath (the image itself contains only the Techtivo
+  mark), used identically on the login page and the dashboard header. The
+  favicon is wired via `metadata.icons` in `src/app/layout.tsx` (the
+  default Next.js `app/favicon.ico` file-convention route was removed so it
+  can't conflict with it) with a `?v=` cache-busting query string (which
+  required allowlisting local image query strings in `next.config.ts`'s
+  `images.localPatterns` — Next.js 16 blocks them by default).
+- MARKO primary color: `#339595`, defined once as CSS custom properties in
+  `src/app/globals.css` (`--color-primary`/`-hover`/`-strong`/`-tint`) and
+  exposed to Tailwind v4 via `@theme inline`, so `bg-primary`/`text-primary`
+  /etc. are real utilities everywhere rather than a repeated literal. The
+  base color measures ~3.6:1 contrast on white — enough for large text/UI
+  components/fills-with-white-text, not for small body text/links, which is
+  why `primary-strong` (a darker shade, ~7:1 on white) exists and is used
+  for text-sized link/label color instead.
+- Global font: Inter, loaded via `next/font/google` in `src/app/layout.tsx`
+  and applied through `--font-sans` in `globals.css`. This also fixed a
+  pre-existing bug: the previous font (Geist) was loaded but never actually
+  applied to `body` (a hardcoded `font-family: Arial...` was overriding
+  it), so the app had been silently rendering in the browser's default
+  serif/sans-serif fallback the whole time.
+- Login page and the dashboard header shell were restyled to match a
+  reference visual identity ("JIRITA") shared by the same parent product —
+  card width/padding/radius/shadow, heading/label/input/button typography
+  (labels specifically: `block text-[10px] font-bold uppercase
+  tracking-widest text-slate-400 mb-1.5`, matching the reference's own
+  computed styles exactly, not an approximation), and the logo lockup's
+  proportions were pixel-measured against reference screenshots (Python/PIL
+  analysis of actual rendered dimensions) rather than eyeballed.
+- Deliberately scoped to shell/foundation styling only: the SEO report page
+  ([siteId]'s health summary/opportunities/change cards, badges, table)
+  was left on its pre-existing visual style — flagged in every pass as
+  explicitly out of scope, pending a future dedicated pass.
+
+### Signup Onboarding (organization name captured at signup)
+- The sign-up form (`/login`) now asks for **Organization name** (above
+  Email, same label treatment) in addition to email/password
+  (`src/app/login/page.tsx`). Validated client-side (trim, non-empty, ≤100
+  chars) via shared `src/lib/organizationName.ts`
+  (`normalizeOrganizationName`, `ORGANIZATION_NAME_MAX_LENGTH`).
+- The name is stored as `pending_organization_name` in the Supabase auth
+  user's metadata at `signUp()` time (`options.data`) — survives the
+  email-verification redirect with no new storage and no migration.
+- On successful verification, `/auth/callback`
+  (`src/app/auth/callback/route.ts`) automatically creates the organization
+  via the existing `create_organization` security-definer RPC (never a
+  direct table insert) and clears the pending metadata, so a normal signup
+  never sees the manual "Create your organization" screen.
+- `requireUserAndOrganization()` (`src/lib/organizations.ts`) has a
+  fallback for users who reach a protected page without having gone
+  through the callback route (e.g. verified earlier, signing in normally
+  later): if there's no membership and `pending_organization_name` is
+  still present, it retries the same RPC. Existing users with no org and no
+  pending name are unaffected — they still see the manual screen.
+  Idempotency is guaranteed by membership existence, not by whether the
+  metadata was cleared: once `create_organization` succeeds once, no later
+  call re-attempts creation for that user, regardless of metadata state.
+  `requireUserAndOrganization` is wrapped in React's `cache()` because
+  `dashboard/layout.tsx` and `dashboard/page.tsx` both call it and Next.js
+  fetches layout/page data in parallel — without deduping, both calls would
+  race the auto-creation logic against each other on every first load.
+- **Bug found and fixed during this work**: an earlier version cleared the
+  pending metadata via `supabase.auth.updateUser()` from inside
+  `requireUserAndOrganization()`, which runs in Server Components. Server
+  Components cannot write cookies, and `updateUser()` is a session-mutating
+  auth call (it fires a `USER_UPDATED` event that `@supabase/ssr`'s client
+  listens for to persist the session via a cookie write) — calling it from
+  there caused the dashboard to hang indefinitely right after email
+  verification. Root-caused by tracing the actual `@supabase/auth-js`/
+  `@supabase/ssr` library internals in `node_modules` (not guessed). Fixed
+  by moving the metadata-clearing call to `/auth/callback` (a Route
+  Handler, which *can* safely mutate the session); the Server-Component
+  fallback path now only ever calls the plain RPC, which has no
+  session/cookie side effects.
+
 ## Current architecture
 
 - Generic account/tenant infrastructure (`organizations`,
@@ -238,6 +320,16 @@ canonicals). Search Console is still not implemented.
   can evolve without touching crawl logic. `issueTaxonomy.ts` is the one
   place category/priority are defined; both the health report and the
   change report import it rather than redefining anything.
+- Shared UI lives in `src/components/` (currently just `MarkoLogo.tsx`,
+  the app's first shared component). Brand tokens (color, font) are
+  defined once in `src/app/globals.css` and consumed everywhere else via
+  Tailwind utilities — no page hardcodes a hex value or font name.
+- Architectural rule (learned from the onboarding hang, see above):
+  session-mutating Supabase auth calls (`updateUser`, `signOut`, etc.) must
+  only be called from Route Handlers or Server Actions, never from Server
+  Components, which cannot write cookies. Compare
+  `src/app/auth/callback/route.ts` (safe) with `src/lib/organizations.ts`'s
+  Server-Component-invoked fallback (RPC-only, no auth mutation).
 
 ## Known limitations
 
@@ -283,6 +375,20 @@ canonicals). Search Console is still not implemented.
   computed only within a single crawl run's own page set (at most 5
   pages) — they cannot detect duplicates against pages outside that run's
   sample.
+- The SEO report page's own visual details (health summary/opportunities/
+  change cards, severity/priority/category badges, per-page table) have not
+  been updated to the new Techtivo/MARKO visual identity — still on the
+  pre-branding-pass style, pending a dedicated future pass.
+- Organization auto-creation at signup has a narrow, explicitly-accepted
+  race window: two genuinely simultaneous first page loads (e.g. two tabs
+  opened at the same instant) could each pass the "no membership yet"
+  check before either commits, creating two organizations for that user.
+  Closing this fully would need a DB constraint tying a user to at most one
+  organization, which would conflict with preserving multi-org-membership
+  support — so it's accepted, not solved.
+- Signup only captures an organization name (validated: trimmed,
+  non-empty, ≤100 characters) — no slug, business profile, or other
+  fields.
 
 ## Deferred scope (explicitly out of this checkpoint)
 
@@ -293,6 +399,11 @@ and any mock/fake analytics. See `CLAUDE.md` for the full list.
 
 ## Next logical milestone
 
-Google Search Console integration: authorize per-site access via OAuth and
-use performance data (clicks/impressions/CTR/position) to enrich
-prioritization and reporting, per CLAUDE.md's Search Console section.
+Product feature track: Google Search Console integration — authorize
+per-site access via OAuth and use performance data (clicks/impressions/
+CTR/position) to enrich prioritization and reporting, per CLAUDE.md's
+Search Console section.
+
+UI track (independent, not blocking the above): extend the Techtivo/MARKO
+visual identity to the SEO report page itself, which the branding pass
+deliberately left untouched.
