@@ -1,10 +1,10 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireUserAndOrganization } from "@/lib/organizations";
 import { isBotProtectionFailureMessage } from "@/lib/crawler/botProtection";
 import { SitesGrid, type SiteCardData } from "@/components/SitesGrid";
 import { deriveSiteHealthSummary } from "@/lib/reporting/siteHealthStatus";
+import { AddSiteButton } from "@/components/AddSiteButton";
 
 async function createOrganization(formData: FormData) {
   "use server";
@@ -56,9 +56,9 @@ function formatRelativeTime(iso: string): string {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; addSite?: string }>;
 }) {
-  const { error } = await searchParams;
+  const { error, addSite } = await searchParams;
   const { organization } = await requireUserAndOrganization();
 
   if (!organization) {
@@ -206,12 +206,10 @@ export default async function DashboardPage({
             Monitor and improve your SEO performance.
           </p>
         </div>
-        <Link
-          href="/dashboard/sites/new"
+        <AddSiteButton
+          initialOpen={addSite === "1"}
           className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-        >
-          + Add site
-        </Link>
+        />
       </div>
 
       {error && (
@@ -228,12 +226,7 @@ export default async function DashboardPage({
           <p className="mt-1 text-sm text-zinc-500">
             Add your first website to get started with MARKO.
           </p>
-          <Link
-            href="/dashboard/sites/new"
-            className="mt-4 inline-block rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-          >
-            + Add site
-          </Link>
+          <AddSiteButton className="mt-4 inline-block rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2" />
         </div>
       ) : (
         <SitesGrid sites={siteCards} />
