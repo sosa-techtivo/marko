@@ -37,7 +37,7 @@ const HEALTH_STYLES: Record<SiteHealthStatus, { badge: string; dot: string; need
   not_analyzed: { badge: "bg-zinc-100 text-zinc-500", dot: "bg-zinc-400", needleColor: "#a1a1aa" },
 };
 
-function HealthIndicator({ status }: { status: SiteHealthStatus }) {
+export function HealthIndicator({ status }: { status: SiteHealthStatus }) {
   const styles = HEALTH_STYLES[status];
   return (
     <span
@@ -114,7 +114,7 @@ const GAUGE_ZONE_COLORS_NEUTRAL = { critical: "#d4d4d8", attention: "#d4d4d8", h
  * 78x40) for at-a-glance legibility; nearby spacing was tightened to
  * absorb the increase without growing the card (see SitesGrid below).
  */
-function SiteHealthGauge({ status }: { status: SiteHealthStatus }) {
+export function SiteHealthGauge({ status }: { status: SiteHealthStatus }) {
   const isNeutral = status === "not_analyzed";
   const zoneColors = isNeutral ? GAUGE_ZONE_COLORS_NEUTRAL : GAUGE_ZONE_COLORS;
   const needleAngle = GAUGE_NEEDLE_ANGLE[status];
