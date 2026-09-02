@@ -59,6 +59,21 @@ export async function runSeoAnalysis(formData: FormData) {
 
   const result = await runCrawl(site.url);
 
+  if (result.ok) {
+    const { error: faviconError } = await supabase.rpc("update_site_favicon", {
+      site_id: site.id,
+      favicon_url: result.faviconUrl,
+    });
+    if (faviconError) {
+      // Non-fatal: the dashboard just falls back to the initial-letter
+      // avatar for this site until a later crawl succeeds in updating it.
+      console.error("[runSeoAnalysis] update_site_favicon RPC failed", {
+        code: faviconError.code,
+        message: faviconError.message,
+      });
+    }
+  }
+
   if (!result.ok) {
     const { error: closeError } = await supabase
       .from("crawl_runs")

@@ -113,7 +113,12 @@ export function analyzePage(params: {
   const fetchFailed = fetched.error !== null;
   const isSuccessStatus = httpStatus !== null && httpStatus >= 200 && httpStatus < 300;
 
-  if (fetchFailed || !isSuccessStatus) {
+  // A confirmed bot-protection challenge (see fetchPage.ts) is not an SEO
+  // finding: MARKO only knows its own crawler was blocked, not that users
+  // or search engines can't reach the page, so no http_error is raised for
+  // it here. (For the crawl's seed page specifically, runCrawl.ts fails
+  // the whole run before analyzePage is ever called — see there.)
+  if ((fetchFailed || !isSuccessStatus) && !fetched.botProtectionBlocked) {
     issues.push({
       type: "http_error",
       severity: "critical",

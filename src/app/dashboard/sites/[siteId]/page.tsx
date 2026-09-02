@@ -5,6 +5,7 @@ import { requireUserAndOrganization } from "@/lib/organizations";
 import { runSeoAnalysis } from "./actions";
 import { buildSeoHealthReport } from "@/lib/reporting/seoHealthReport";
 import { buildSeoChangeReport, type ChangedIssue } from "@/lib/reporting/seoChangeReport";
+import { isBotProtectionFailureMessage } from "@/lib/crawler/botProtection";
 import {
   CATEGORY_LABELS,
   ISSUE_TAXONOMY,
@@ -142,21 +143,37 @@ export default async function SiteDetailPage({
     .limit(1)
     .maybeSingle();
 
-  const { data: crawlPages } = latestRun
+  // Independent of `latestRun` above (which may be running/failed —
+  // including a bot-protection-blocked attempt): the SEO report and the
+  // Historical Changes comparison are both always sourced from the two most
+  // recent *completed* runs, so a failed latest attempt never replaces or
+  // hides the last genuinely successful report.
+  const { data: completedRuns } = await supabase
+    .from("crawl_runs")
+    .select("id, started_at")
+    .eq("site_id", site.id)
+    .eq("status", "completed")
+    .order("started_at", { ascending: false })
+    .limit(2);
+
+  const latestCompletedRun = completedRuns?.[0] ?? null;
+  const previousCompletedRun = completedRuns?.[1] ?? null;
+
+  const { data: crawlPages } = latestCompletedRun
     ? await supabase
         .from("crawl_pages")
         .select(
           "id, url, http_status, title, meta_description, h1, canonical_url, is_indexable",
         )
-        .eq("crawl_run_id", latestRun.id)
+        .eq("crawl_run_id", latestCompletedRun.id)
         .order("created_at", { ascending: true })
     : { data: null };
 
-  const { data: crawlIssues } = latestRun
+  const { data: crawlIssues } = latestCompletedRun
     ? await supabase
         .from("crawl_issues")
         .select("id, crawl_page_id, issue_type, severity, message")
-        .eq("crawl_run_id", latestRun.id)
+        .eq("crawl_run_id", latestCompletedRun.id)
     : { data: null };
 
   const issuesByPageId = new Map<string, NonNullable<typeof crawlIssues>>();
@@ -170,24 +187,16 @@ export default async function SiteDetailPage({
   const issuesFound = crawlIssues?.length ?? 0;
   const criticalIssues = crawlIssues?.filter((issue) => issue.severity === "critical").length ?? 0;
 
-  const healthReport =
-    latestRun?.status === "completed"
-      ? buildSeoHealthReport(crawlPages ?? [], crawlIssues ?? [])
-      : null;
+  const healthReport = latestCompletedRun
+    ? buildSeoHealthReport(crawlPages ?? [], crawlIssues ?? [])
+    : null;
 
-  // Independent of `latestRun` above (which may be running/failed): the
-  // comparison is always between the two most recent *completed* runs, per
-  // Milestone 4.
-  const { data: completedRuns } = await supabase
-    .from("crawl_runs")
-    .select("id, started_at")
-    .eq("site_id", site.id)
-    .eq("status", "completed")
-    .order("started_at", { ascending: false })
-    .limit(2);
-
-  const latestCompletedRun = completedRuns?.[0] ?? null;
-  const previousCompletedRun = completedRuns?.[1] ?? null;
+  // True whenever the report/table below is showing an older completed run
+  // than the absolute latest attempt (e.g. the latest attempt failed —
+  // bot-blocked or otherwise — or is still running).
+  const isShowingPreservedReport = Boolean(
+    latestCompletedRun && latestRun && latestRun.id !== latestCompletedRun.id,
+  );
 
   const { data: comparisonPages } = latestCompletedRun && previousCompletedRun
     ? await supabase
@@ -286,12 +295,25 @@ export default async function SiteDetailPage({
               <StatusBadge status={latestRun.status} />
             </div>
 
-            {latestRun.status === "failed" && (
-              <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {latestRun.error_message ?? "The analysis failed."}
-              </p>
-            )}
+            {latestRun.status === "failed" &&
+              (isBotProtectionFailureMessage(latestRun.error_message) ? (
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+                  <p className="font-semibold">Analysis blocked</p>
+                  <p className="mt-1">{latestRun.error_message}</p>
+                </div>
+              ) : (
+                <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {latestRun.error_message ?? "The analysis failed."}
+                </p>
+              ))}
           </div>
+
+          {isShowingPreservedReport && latestCompletedRun && (
+            <p className="text-xs text-zinc-500">
+              Showing results from the last successful analysis, on{" "}
+              {new Date(latestCompletedRun.started_at).toLocaleString()}.
+            </p>
+          )}
 
           {healthReport && (
             <div className="rounded-lg border border-zinc-200 bg-white p-4">

@@ -9,6 +9,8 @@ import {
 } from "./html";
 import { analyzePage, type AnalyzedPage } from "./analyze";
 import { applyCrossPageChecks } from "./crossPageChecks";
+import { resolveFaviconUrl } from "./favicon";
+import { formatBotProtectionErrorMessage } from "./botProtection";
 
 /**
  * MVP crawl limit: the start URL plus up to this many same-site internal
@@ -95,7 +97,9 @@ async function fetchAndAnalyze(url: string): Promise<AnalyzedPage> {
   });
 }
 
-export type CrawlResult = { ok: true; pages: AnalyzedPage[] } | { ok: false; error: string };
+export type CrawlResult =
+  | { ok: true; pages: AnalyzedPage[]; faviconUrl: string | null }
+  | { ok: false; error: string };
 
 /**
  * Crawls `startUrl` plus up to MAX_ADDITIONAL_PAGES same-site internal links
@@ -119,6 +123,16 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
       ok: false,
       error: `Could not reach ${parsedStart.toString()} (${startFetched.error}).`,
     };
+  }
+
+  // The seed page is how MARKO discovers every other page in this crawl —
+  // if it's a bot-protection challenge rather than real content, there's
+  // nothing to analyze or discover pages from. Fail the run cleanly rather
+  // than analyzing the challenge page as if it were the site (which would
+  // produce a false "Page not reachable" SEO finding — see the
+  // boyaca.gov.co diagnosis in PROJECT_STATUS.md).
+  if (startFetched.botProtectionBlocked) {
+    return { ok: false, error: formatBotProtectionErrorMessage(startFetched.status) };
   }
 
   const startHtml = startFetched.html ?? "";
@@ -146,5 +160,7 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
     pages.push(await fetchAndAnalyze(link));
   }
 
-  return { ok: true, pages: applyCrossPageChecks(pages) };
+  const faviconUrl = resolveFaviconUrl(startHtml, parsedStart);
+
+  return { ok: true, pages: applyCrossPageChecks(pages), faviconUrl };
 }

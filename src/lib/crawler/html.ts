@@ -80,6 +80,17 @@ export function extractCanonical(html: string): string | null {
   return null;
 }
 
+/** Matches <link rel="icon"> and <link rel="shortcut icon"> (not apple-touch-icon etc). */
+export function extractFaviconHref(html: string): string | null {
+  for (const tag of findTags(html, "link")) {
+    const rel = getAttr(tag, "rel");
+    if (rel && rel.toLowerCase().split(/\s+/).includes("icon")) {
+      return getAttr(tag, "href");
+    }
+  }
+  return null;
+}
+
 export function extractLinkHrefs(html: string): string[] {
   const hrefs: string[] = [];
   for (const tag of findTags(html, "a")) {

@@ -54,6 +54,7 @@ export type Database = {
           organization_id: string;
           name: string;
           url: string;
+          favicon_url: string | null;
           created_at: string;
         };
         Insert: {
@@ -61,6 +62,7 @@ export type Database = {
           organization_id: string;
           name: string;
           url: string;
+          favicon_url?: string | null;
           created_at?: string;
         };
         Update: {
@@ -68,6 +70,7 @@ export type Database = {
           organization_id?: string;
           name?: string;
           url?: string;
+          favicon_url?: string | null;
           created_at?: string;
         };
         Relationships: [
@@ -262,6 +265,10 @@ export type Database = {
           name: string;
           created_at: string;
         };
+      };
+      update_site_favicon: {
+        Args: { site_id: string; favicon_url: string | null };
+        Returns: undefined;
       };
     };
     Enums: Record<string, never>;

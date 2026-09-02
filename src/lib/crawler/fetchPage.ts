@@ -11,6 +11,17 @@ export type FetchedPage = {
   contentType: string | null;
   xRobotsTag: string | null;
   error: string | null;
+  /**
+   * True when the response looks like a bot-protection challenge rather
+   * than the site's real content (confirmed signal: a non-2xx response
+   * carrying `cf-mitigated: challenge`, i.e. Cloudflare's own explicit
+   * marker that it intercepted the request with a Managed Challenge —
+   * see the boyaca.gov.co diagnosis in PROJECT_STATUS.md). Deliberately
+   * narrow: this is not a general WAF-detection framework, just the one
+   * confirmed, unambiguous signal. Never set by attempting to solve the
+   * challenge, spoof a browser, or otherwise bypass it.
+   */
+  botProtectionBlocked: boolean;
 };
 
 function isHtmlContentType(contentType: string | null): boolean {
@@ -19,8 +30,22 @@ function isHtmlContentType(contentType: string | null): boolean {
   return type.includes("text/html") || type.includes("application/xhtml+xml");
 }
 
+/** Confirmed signal only: a non-2xx response Cloudflare itself marks as a challenge. */
+function isBotProtectionChallenge(status: number, headers: Headers): boolean {
+  if (status >= 200 && status < 300) return false;
+  const mitigated = headers.get("cf-mitigated");
+  return mitigated !== null && mitigated.toLowerCase() === "challenge";
+}
+
 function errorResult(message: string): FetchedPage {
-  return { status: null, html: null, contentType: null, xRobotsTag: null, error: message };
+  return {
+    status: null,
+    html: null,
+    contentType: null,
+    xRobotsTag: null,
+    error: message,
+    botProtectionBlocked: false,
+  };
 }
 
 export async function fetchPage(url: string): Promise<FetchedPage> {
@@ -71,16 +96,17 @@ export async function fetchPage(url: string): Promise<FetchedPage> {
 
       const contentType = response.headers.get("content-type");
       const xRobotsTag = response.headers.get("x-robots-tag");
+      const botProtectionBlocked = isBotProtectionChallenge(response.status, response.headers);
 
       if (!isHtmlContentType(contentType)) {
-        return { status: response.status, html: null, contentType, xRobotsTag, error: null };
+        return { status: response.status, html: null, contentType, xRobotsTag, error: null, botProtectionBlocked };
       }
 
       const buffer = await response.arrayBuffer();
       const truncated = buffer.byteLength > MAX_BODY_BYTES ? buffer.slice(0, MAX_BODY_BYTES) : buffer;
       const html = new TextDecoder("utf-8", { fatal: false }).decode(truncated);
 
-      return { status: response.status, html, contentType, xRobotsTag, error: null };
+      return { status: response.status, html, contentType, xRobotsTag, error: null, botProtectionBlocked };
     }
 
     return errorResult(`Too many redirects (limit ${MAX_REDIRECTS}).`);
