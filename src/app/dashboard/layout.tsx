@@ -23,17 +23,17 @@ export default async function DashboardLayout({
           </Link>
           {organization && (
             <>
-              <span className="text-sm text-zinc-400">/</span>
-              <span className="text-sm text-zinc-600">{organization.name}</span>
+              <span className="text-xs text-zinc-400">/</span>
+              <span className="text-xs text-zinc-600">{organization.name}</span>
             </>
           )}
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-sm text-zinc-500">{user.email}</span>
+          <span className="text-xs text-zinc-500">{user.email}</span>
           <form action="/auth/signout" method="post">
             <button
               type="submit"
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+              className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
             >
               Sign out
             </button>

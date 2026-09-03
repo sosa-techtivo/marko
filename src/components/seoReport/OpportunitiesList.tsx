@@ -31,7 +31,7 @@ export function OpportunitiesList({ opportunities }: { opportunities: SeoOpportu
             <div className="flex flex-wrap items-center gap-1.5">
               <PriorityBadge priority={opportunity.priority} />
               <CategoryBadge category={opportunity.category} />
-              <h3 className="text-sm font-medium text-zinc-900">{opportunity.label}</h3>
+              <h3 className="text-xs font-medium text-zinc-900">{opportunity.label}</h3>
               <span className="text-xs text-zinc-500">
                 {affectedPages.length} page{affectedPages.length === 1 ? "" : "s"} affected
               </span>

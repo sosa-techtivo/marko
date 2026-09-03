@@ -10,6 +10,7 @@ import {
   type SeoOpportunity,
 } from "@/lib/reporting/seoHealthReport";
 import type { PageIssueRow } from "@/components/seoReport/AnalyzedPagesTable";
+import { siteDetailPath } from "@/lib/sites/paths";
 
 export async function runSeoAnalysis(formData: FormData) {
   const siteId = String(formData.get("siteId") ?? "").trim();
@@ -26,7 +27,7 @@ export async function runSeoAnalysis(formData: FormData) {
 
   const { data: site, error: siteError } = await supabase
     .from("sites")
-    .select("id, organization_id, url")
+    .select("id, organization_id, url, slug")
     .eq("id", siteId)
     .eq("organization_id", organization.id)
     .maybeSingle();
@@ -60,7 +61,7 @@ export async function runSeoAnalysis(formData: FormData) {
       details: insertRunError?.details,
       hint: insertRunError?.hint,
     });
-    redirect(`/dashboard/sites/${siteId}?error=crawl-start-failed`);
+    redirect(`${siteDetailPath(site.slug)}?error=crawl-start-failed`);
   }
 
   const result = await runCrawl(site.url);
@@ -98,7 +99,7 @@ export async function runSeoAnalysis(formData: FormData) {
       });
     }
 
-    redirect(`/dashboard/sites/${siteId}`);
+    redirect(siteDetailPath(site.slug));
   }
 
   const { data: insertedPages, error: pagesError } = await supabase
@@ -139,7 +140,7 @@ export async function runSeoAnalysis(formData: FormData) {
       })
       .eq("id", crawlRun.id);
 
-    redirect(`/dashboard/sites/${siteId}`);
+    redirect(siteDetailPath(site.slug));
   }
 
   const pageIdByUrl = new Map(insertedPages.map((row) => [row.url, row.id]));
@@ -185,7 +186,7 @@ export async function runSeoAnalysis(formData: FormData) {
     });
   }
 
-  redirect(`/dashboard/sites/${siteId}`);
+  redirect(siteDetailPath(site.slug));
 }
 
 export type CrawlRunDetailResult =

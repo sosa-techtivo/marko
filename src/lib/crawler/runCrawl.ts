@@ -31,7 +31,7 @@ export const MAX_PAGES_PER_CRAWL = 1 + MAX_ADDITIONAL_PAGES;
  * mutable state and each call is independently SSRF-checked/timed-out, so
  * running a small batch concurrently is safe — it's the only way to keep
  * a 20-page crawl's worst-case wall-clock time inside the existing
- * `maxDuration = 60` budget (see `src/app/dashboard/sites/[siteId]/page.tsx`)
+ * `maxDuration = 60` budget (see `src/app/dashboard/sites/[slug]/page.tsx`)
  * without shortening `fetchPage`'s existing 8s-per-page timeout (which
  * would make genuinely-slow-but-valid pages more likely to be
  * misreported as unreachable).

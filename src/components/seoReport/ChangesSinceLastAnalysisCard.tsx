@@ -108,7 +108,7 @@ function ChangesModal({
       >
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-100 p-4">
           <div className="min-w-0">
-            <h2 id={titleId} className="text-lg font-semibold text-zinc-900">
+            <h2 id={titleId} className="text-base font-semibold text-zinc-900">
               Changes Since Last Analysis
             </h2>
             <p className="mt-0.5 text-xs text-zinc-500">
@@ -141,7 +141,7 @@ function ChangesModal({
             <SummaryStat label="New" value={changeReport.summary.newCount} />
             <SummaryStat label="Remaining" value={changeReport.summary.remainingCount} />
             <div className="flex flex-col gap-1">
-              <p className="text-2xl font-semibold text-zinc-900">
+              <p className="text-xl font-semibold text-zinc-900">
                 {changeReport.summary.previousPagesWithIssues} →{" "}
                 {changeReport.summary.currentPagesWithIssues}
               </p>
@@ -236,10 +236,10 @@ export function ChangesSinceLastAnalysisCard({
 
   return (
     <div className="flex h-full flex-col rounded-lg border border-zinc-200 bg-white p-4">
-      <h2 className="text-sm font-semibold text-zinc-900">Changes Since Last Analysis</h2>
+      <h2 className="text-xs font-semibold text-zinc-900">Changes Since Last Analysis</h2>
 
       {changeReport.status === "no-previous-run" ? (
-        <p className="mt-2 text-sm text-zinc-600">
+        <p className="mt-2 text-xs text-zinc-600">
           No previous analysis is available for comparison yet. This is the first completed crawl
           for this site.
         </p>
@@ -257,7 +257,7 @@ export function ChangesSinceLastAnalysisCard({
             <SummaryStat label="New" value={changeReport.summary.newCount} />
             <SummaryStat label="Remaining" value={changeReport.summary.remainingCount} />
             <div className="flex flex-col gap-1">
-              <p className="text-2xl font-semibold text-zinc-900">
+              <p className="text-xl font-semibold text-zinc-900">
                 {changeReport.summary.previousPagesWithIssues} →{" "}
                 {changeReport.summary.currentPagesWithIssues}
               </p>

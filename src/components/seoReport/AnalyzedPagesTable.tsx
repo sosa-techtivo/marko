@@ -31,7 +31,7 @@ export function AnalyzedPagesTable({
 
   return (
     <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
-      <table className="w-full min-w-[640px] text-left text-sm">
+      <table className="w-full min-w-[640px] text-left text-xs">
         <thead>
           <tr className="border-b border-zinc-200 text-xs text-zinc-500">
             <th className="px-4 py-2 font-medium">URL</th>

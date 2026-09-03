@@ -3,20 +3,25 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireUserAndOrganization } from "@/lib/organizations";
 import { runSeoAnalysis } from "./actions";
+import { resolveSiteBySlug } from "./resolveSite";
 import { buildSeoHealthReport } from "@/lib/reporting/seoHealthReport";
 import { buildSeoChangeReport } from "@/lib/reporting/seoChangeReport";
+import { buildMarkoInsights } from "@/lib/reporting/markoInsights";
 import { isBotProtectionFailureMessage } from "@/lib/crawler/botProtection";
 import { checkSiteEmbeddable } from "@/lib/preview/checkEmbeddable";
 import { WebsitePreviewCard } from "@/components/WebsitePreviewCard";
 import { SiteHealthGauge, HealthIndicator } from "@/components/SitesGrid";
 import { deriveSiteHealthSummary } from "@/lib/reporting/siteHealthStatus";
 import { StatusBadge, SummaryStat } from "@/components/seoReport/badges";
-import { OpportunitiesList } from "@/components/seoReport/OpportunitiesList";
-import { AnalyzedPagesTable } from "@/components/seoReport/AnalyzedPagesTable";
 import { AnalysisHistorySection } from "@/components/seoReport/AnalysisHistoryList";
 import { SeoProgressChart } from "@/components/seoReport/SeoProgressChart";
 import { ChangesSinceLastAnalysisCard } from "@/components/seoReport/ChangesSinceLastAnalysisCard";
 import { GoogleSearchConsoleCard } from "@/components/seoReport/GoogleSearchConsoleCard";
+import { MarkoInsightsCard } from "@/components/seoReport/MarkoInsightsCard";
+import {
+  PreviewHeightMatchProvider,
+  PreviewHeightMeasuredBox,
+} from "@/components/seoReport/PreviewHeightMatch";
 import { getGoogleConnectionStatus } from "@/lib/googleSearchConsole/connectionStatus";
 import { getSiteSearchConsoleSnapshot } from "@/lib/googleSearchConsole/siteSnapshot";
 
@@ -32,10 +37,10 @@ export default async function SiteDetailPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ siteId: string }>;
+  params: Promise<{ slug: string }>;
   searchParams: Promise<{ error?: string }>;
 }) {
-  const { siteId } = await params;
+  const { slug } = await params;
   const { error } = await searchParams;
   const { organization } = await requireUserAndOrganization();
 
@@ -45,14 +50,7 @@ export default async function SiteDetailPage({
 
   const supabase = await createClient();
 
-  const { data: site } = await supabase
-    .from("sites")
-    .select(
-      "id, name, url, favicon_url, search_console_property_url, search_console_property_type",
-    )
-    .eq("id", siteId)
-    .eq("organization_id", organization.id)
-    .maybeSingle();
+  const site = await resolveSiteBySlug(supabase, organization.id, slug);
 
   if (!site) {
     notFound();
@@ -254,17 +252,12 @@ export default async function SiteDetailPage({
   const embedCheck = await embedCheckPromise;
 
   const showsProgressCard = hasMultipleCompletedAnalyses && progressChartPoints.length > 0;
-  // ROW 1 (Current SEO health / Website Preview / SEO progress / Changes
-  // Since Last Analysis) adapts its column count to how many of those four
-  // cards actually render — health and preview always do; the other two
-  // are conditional on existing data, unchanged from before this pass.
-  const rowOneCardCount = 2 + (showsProgressCard ? 1 : 0) + (changeReport ? 1 : 0);
-  const rowOneGridColsClass =
-    rowOneCardCount >= 4
-      ? "lg:grid-cols-4"
-      : rowOneCardCount === 3
-        ? "lg:grid-cols-3"
-        : "lg:grid-cols-2";
+
+  // MARKO Insights: deterministic, derived entirely from the health report
+  // and change report already computed above — no new data, no AI, no
+  // Search Console dependency. Both are non-null together (both gated on
+  // `latestCompletedRun`), so this is just an explicit narrowing.
+  const markoInsights = healthReport && changeReport ? buildMarkoInsights(healthReport, changeReport) : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -274,7 +267,7 @@ export default async function SiteDetailPage({
           vertical whitespace. `flex-wrap` lets the button drop to its own
           line if the left side runs out of room on very small screens. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-xs">
           <Link
             href="/dashboard"
             className="shrink-0 text-zinc-500 hover:text-primary-strong"
@@ -294,7 +287,7 @@ export default async function SiteDetailPage({
           <input type="hidden" name="siteId" value={site.id} />
           <button
             type="submit"
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
           >
             Run SEO analysis
           </button>
@@ -302,137 +295,127 @@ export default async function SiteDetailPage({
       </div>
 
       {error && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
           {error === "crawl-start-failed"
             ? "Could not start the SEO analysis. Please try again."
             : "Something went wrong. Please try again."}
         </p>
       )}
 
-      {/* Independent of crawl history (a Google connection/property can be
-          set up before any SEO analysis has ever run), so this sits outside
-          the "no analysis yet" branch below rather than inside either
-          side of it. */}
-      <GoogleSearchConsoleCard
-        siteId={site.id}
-        siteUrl={site.url}
-        connection={gscConnection}
-        initialProperty={
-          site.search_console_property_url && site.search_console_property_type
-            ? {
-                url: site.search_console_property_url,
-                type: site.search_console_property_type as "url_prefix" | "domain",
-              }
-            : null
-        }
-        snapshot={gscSnapshot}
-      />
-
-      {!latestRun ? (
-        <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-16 text-center">
-          <p className="text-sm font-medium text-zinc-900">No analysis yet</p>
-          <p className="mt-1 text-sm text-zinc-500">
-            Run an SEO analysis to see a summary and issues for this site.
-          </p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {/* ROW 1: Current SEO health / Website Preview / SEO progress /
-              Changes Since Last Analysis — up to 4 equal-width columns
-              (fewer when a card doesn't apply). These stretch to match
-              each other (default grid alignment) except Website Preview,
-              whose own internal preview box keeps its fixed aspect ratio
-              regardless — only its outer card border stretches, so nothing
-              inside it is squeezed/cropped to force the row height. */}
-          <div className={`grid grid-cols-1 gap-4 ${rowOneGridColsClass}`}>
-            {/* Current SEO health: latest-attempt status + the categorical
-                gauge/status (reused from the dashboard cards) + the same
-                summary stats the old separate "SEO Health Summary" card
-                showed, now compacted into one card. Spacing tightened
-                (mt-3→mt-2, gap-4→gap-3, mt-4/pt-4→mt-3/pt-3) for the
-                narrower 1/4-width column this card now sits in. */}
+      {/* Three independent flex columns (plain CSS — column heights are
+          not related to each other in any way). The only cross-column
+          height relationship on this page is MARKO Insights reading
+          Website Preview's rendered height as a desktop-only maximum (see
+          PreviewHeightMatch) — Current SEO Health, Changes Since Last
+          Analysis, and SEO progress are completely untouched by it and
+          just render at their natural height, same as always. */}
+      <PreviewHeightMatchProvider>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {/* Column 1: SEO Audit / Health */}
+          <div className="flex flex-col gap-4">
+            {/* Current SEO health + latest audit summary, combined into
+                one card as before — status/gauge/health indicator plus the
+                pages-analyzed/pages-with-issues/high-priority/total-
+                opportunities stats for the latest completed analysis. */}
             <div className="rounded-lg border border-zinc-200 bg-white p-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-zinc-900">Current SEO health</h2>
-                <StatusBadge status={latestRun.status} />
+                <h2 className="text-xs font-semibold text-zinc-900">Current SEO health</h2>
+                {latestRun && <StatusBadge status={latestRun.status} />}
               </div>
 
-              <div className="mt-2 flex items-center gap-3">
-                <SiteHealthGauge status={siteHealth.status} />
-                <div className="min-w-0">
-                  <HealthIndicator status={siteHealth.status} />
-                  <p className="mt-1.5 text-xs text-zinc-500">
-                    {latestCompletedRun
-                      ? `Latest completed analysis: ${new Date(
-                          latestCompletedRun.completed_at ?? latestCompletedRun.started_at,
-                        ).toLocaleString()}`
-                      : "No completed analysis yet."}
+              {!latestRun ? (
+                <div className="mt-3 rounded-md border border-dashed border-zinc-300 px-4 py-8 text-center">
+                  <p className="text-xs font-medium text-zinc-900">No analysis yet</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Run an SEO analysis to see a summary and issues for this site.
                   </p>
                 </div>
-              </div>
-
-              {latestRun.status === "failed" &&
-                (isBotProtectionFailureMessage(latestRun.error_message) ? (
-                  <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
-                    <p className="font-semibold">Analysis blocked</p>
-                    <p className="mt-1">{latestRun.error_message}</p>
+              ) : (
+                <>
+                  <div className="mt-2 flex items-center gap-3">
+                    <SiteHealthGauge status={siteHealth.status} />
+                    <div className="min-w-0">
+                      <HealthIndicator status={siteHealth.status} />
+                      <p className="mt-1.5 text-xs text-zinc-500">
+                        {latestCompletedRun
+                          ? `Latest completed analysis: ${new Date(
+                              latestCompletedRun.completed_at ?? latestCompletedRun.started_at,
+                            ).toLocaleString()}`
+                          : "No completed analysis yet."}
+                      </p>
+                    </div>
                   </div>
-                ) : (
-                  <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                    {latestRun.error_message ?? "The analysis failed."}
-                  </p>
-                ))}
 
-              {isShowingPreservedReport && latestCompletedRun && (
-                <p className="mt-3 text-xs text-zinc-500">
-                  Showing results from the last successful analysis, on{" "}
-                  {new Date(latestCompletedRun.started_at).toLocaleString()}.
-                </p>
-              )}
+                  {latestRun.status === "failed" &&
+                    (isBotProtectionFailureMessage(latestRun.error_message) ? (
+                      <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
+                        <p className="font-semibold">Analysis blocked</p>
+                        <p className="mt-1">{latestRun.error_message}</p>
+                      </div>
+                    ) : (
+                      <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                        {latestRun.error_message ?? "The analysis failed."}
+                      </p>
+                    ))}
 
-              {healthReport && (
-                <div className="mt-3 grid grid-cols-2 gap-3 border-t border-zinc-100 pt-3">
-                  <SummaryStat label="Pages analyzed" value={healthReport.summary.pagesAnalyzed} />
-                  <SummaryStat
-                    label="Pages with issues"
-                    value={healthReport.summary.pagesWithIssues}
-                  />
-                  <SummaryStat
-                    label="High-priority issues"
-                    value={healthReport.summary.highPriorityIssues}
-                  />
-                  <SummaryStat
-                    label="Total opportunities"
-                    value={healthReport.summary.totalIssues}
-                  />
-                </div>
+                  {isShowingPreservedReport && latestCompletedRun && (
+                    <p className="mt-3 text-xs text-zinc-500">
+                      Showing results from the last successful analysis, on{" "}
+                      {new Date(latestCompletedRun.started_at).toLocaleString()}.
+                    </p>
+                  )}
+
+                  {healthReport && (
+                    <div className="mt-3 grid grid-cols-2 gap-3 border-t border-zinc-100 pt-3">
+                      <SummaryStat
+                        label="Pages analyzed"
+                        value={healthReport.summary.pagesAnalyzed}
+                      />
+                      <SummaryStat
+                        label="Pages with issues"
+                        value={healthReport.summary.pagesWithIssues}
+                      />
+                      <SummaryStat
+                        label="High-priority issues"
+                        value={healthReport.summary.highPriorityIssues}
+                      />
+                      <SummaryStat
+                        label="Total opportunities"
+                        value={healthReport.summary.totalIssues}
+                      />
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
-            <WebsitePreviewCard
-              siteName={site.name}
-              url={site.url}
-              faviconUrl={site.favicon_url}
-              embedStatus={embedCheck}
-            />
-
-            {/* SEO progress: only once there's an actual trend to show
-                (2+ completed analyses) — one point per completed run,
-                reusing the exact totals ("Total opportunities" /
-                "High-priority issues") shown elsewhere in this report. No
-                invented score, no AI: every value is a persisted
-                crawl_issues count. Replaces Top Opportunities/Analyzed
-                pages on the main page once there's history to show instead
-                — see below. */}
-            {showsProgressCard && (
-              <div className="flex h-full flex-col rounded-lg border border-zinc-200 bg-white p-4">
-                <h2 className="text-sm font-semibold text-zinc-900">SEO progress</h2>
-                <p className="mt-0.5 text-xs text-zinc-500">
-                  Last {progressChartPoints.length} completed analyses.
+            {/* Unique content not shown anywhere else (the Analysis
+                History detail modal only lists opportunities/pages, not
+                this positive-signal summary) — always relevant whenever
+                the latest completed crawl found zero issues. Kept
+                directly under Current SEO health since it's part of that
+                same health reading. */}
+            {healthReport && healthReport.opportunities.length === 0 && (
+              <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+                <p className="text-xs font-medium text-green-800">
+                  No critical SEO issues were detected in this crawl.
                 </p>
-                <div className="mt-2 flex-1">
-                  <SeoProgressChart points={progressChartPoints} />
-                </div>
+                {healthReport.positiveSignals.length > 0 && (
+                  <ul className="mt-3 flex flex-col gap-1.5">
+                    {healthReport.positiveSignals.map((signal) => (
+                      <li key={signal} className="flex items-start gap-2 text-xs text-green-700">
+                        <span aria-hidden="true">✓</span>
+                        <span>{signal}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-3 text-xs text-green-700">
+                  This reflects only what this crawl measured (
+                  {healthReport.summary.pagesAnalyzed} page
+                  {healthReport.summary.pagesAnalyzed === 1 ? "" : "s"}) — not a guarantee of
+                  overall SEO performance.
+                </p>
               </div>
             )}
 
@@ -442,66 +425,84 @@ export default async function SiteDetailPage({
                 changeSummaryMessage={changeSummaryMessage}
               />
             )}
+
+            {/* SEO progress: only once there's an actual trend to show
+                (2+ completed analyses) — one point per completed run,
+                reusing the exact totals ("Total opportunities" /
+                "High-priority issues") shown elsewhere in this report. No
+                invented score, no AI: every value is a persisted
+                crawl_issues count. Final card in this column. */}
+            {showsProgressCard && (
+              <div className="rounded-lg border border-zinc-200 bg-white p-4">
+                <h2 className="text-xs font-semibold text-zinc-900">SEO progress</h2>
+                <p className="mt-0.5 text-xs text-zinc-500">
+                  Last {progressChartPoints.length} completed analyses.
+                </p>
+                <div className="mt-2">
+                  <SeoProgressChart points={progressChartPoints} />
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* ROW 2: Analysis history master-detail, full width — moved out
-              of the narrow-column grid above. Owns its own two-panel
-              layout/borders internally (list ~30% / detail ~70%), so no
-              extra wrapping card is needed here. */}
-          <AnalysisHistorySection
-            siteId={site.id}
-            runs={recentRuns ?? []}
-            issueCounts={Object.fromEntries(issueCountByRunId)}
-          />
+          {/* Column 2: MARKO Insights (height-capped to Website Preview on
+              desktop, see the comment above) then Analysis History (fills
+              the rest of the column, its own internal scroll — see
+              AnalysisHistorySection). Both render unconditionally (their
+              own empty states cover "no analysis yet"/zero runs) so this
+              column is never missing/blank. Row-click still opens the
+              existing wide analysis-detail modal; no detail is ever
+              rendered inline here. */}
+          <div className="flex h-full min-h-0 flex-col gap-4">
+            <MarkoInsightsCard
+              siteId={site.id}
+              latestCompletedRun={
+                latestCompletedRun
+                  ? { id: latestCompletedRun.id, startedAt: latestCompletedRun.started_at }
+                  : null
+              }
+              insights={markoInsights}
+            />
+            <AnalysisHistorySection
+              siteId={site.id}
+              runs={recentRuns ?? []}
+              issueCounts={Object.fromEntries(issueCountByRunId)}
+            />
+          </div>
 
-          {/* Below both rows: detailed current-analysis content,
-              only relevant while there's no Analysis History detail to
-              rely on instead (0-1 completed analyses) — unchanged from
-              before this layout pass, full width. */}
-          {healthReport && healthReport.opportunities.length === 0 && (
-            <div className="rounded-lg border border-green-200 bg-green-50 p-4">
-              <p className="text-sm font-medium text-green-800">
-                No critical SEO issues were detected in this crawl.
-              </p>
-              {healthReport.positiveSignals.length > 0 && (
-                <ul className="mt-3 flex flex-col gap-1.5">
-                  {healthReport.positiveSignals.map((signal) => (
-                    <li key={signal} className="flex items-start gap-2 text-sm text-green-700">
-                      <span aria-hidden="true">✓</span>
-                      <span>{signal}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="mt-3 text-xs text-green-700">
-                This reflects only what this crawl measured ({healthReport.summary.pagesAnalyzed}{" "}
-                page{healthReport.summary.pagesAnalyzed === 1 ? "" : "s"}) — not a guarantee of
-                overall SEO performance.
-              </p>
-            </div>
-          )}
-
-          {!hasMultipleCompletedAnalyses && healthReport && healthReport.opportunities.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <h2 className="text-sm font-semibold text-zinc-900">Top Opportunities</h2>
-              <OpportunitiesList opportunities={healthReport.opportunities} />
-            </div>
-          )}
-
-          {!hasMultipleCompletedAnalyses && crawlPages && crawlPages.length > 0 && (
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-900">
-                Analyzed pages ({crawlPages.length})
-              </h2>
-              <p className="mt-0.5 text-xs text-zinc-500">Pages included in the latest analysis.</p>
-
-              <div className="mt-2">
-                <AnalyzedPagesTable pages={crawlPages} issues={crawlIssues ?? []} />
-              </div>
-            </div>
-          )}
+          {/* Column 3: Site context — live site preview (the height
+              reference MARKO Insights reads via PreviewHeightMeasuredBox,
+              which adds no styling of its own, so Preview's own
+              presentation is unaffected), then Search Console with
+              reduced visual prominence (see GoogleSearchConsoleCard) but
+              identical functionality/data. */}
+          <div className="flex flex-col gap-4">
+            <PreviewHeightMeasuredBox>
+              <WebsitePreviewCard
+                siteName={site.name}
+                url={site.url}
+                faviconUrl={site.favicon_url}
+                embedStatus={embedCheck}
+              />
+            </PreviewHeightMeasuredBox>
+            <GoogleSearchConsoleCard
+              siteId={site.id}
+              siteSlug={site.slug}
+              siteUrl={site.url}
+              connection={gscConnection}
+              initialProperty={
+                site.search_console_property_url && site.search_console_property_type
+                  ? {
+                      url: site.search_console_property_url,
+                      type: site.search_console_property_type as "url_prefix" | "domain",
+                    }
+                  : null
+              }
+              snapshot={gscSnapshot}
+            />
+          </div>
         </div>
-      )}
+      </PreviewHeightMatchProvider>
     </div>
   );
 }

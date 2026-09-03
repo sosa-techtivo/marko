@@ -5,12 +5,16 @@ import Link from "next/link";
 import { SiteFavicon } from "@/components/SiteFavicon";
 import { SiteMenu } from "@/components/SiteMenu";
 import { SITE_HEALTH_STATUS_LABELS, type SiteHealthStatus } from "@/lib/reporting/siteHealthStatus";
+import { siteDetailPath } from "@/lib/sites/paths";
 
 /** A site's dashboard card, fully pre-derived server-side (page.tsx) from
  * the existing health/bot-protection logic — this component only filters
  * and renders, it never re-derives SEO health or bot-block status itself. */
 export type SiteCardData = {
   id: string;
+  /** Used to build the site's detail page URL (see siteDetailPath) — the
+   * UUID `id` above is never exposed in that link. */
+  slug: string;
   name: string;
   url: string;
   faviconUrl: string | null;
@@ -209,7 +213,7 @@ const STATUS_FILTER_OPTIONS: { value: StatusFilterValue; label: string }[] = [
 function SiteCard({ site }: { site: SiteCardData }) {
   return (
     <Link
-      href={`/dashboard/sites/${site.id}`}
+      href={siteDetailPath(site.slug)}
       className="flex h-full flex-col rounded-xl border border-zinc-200 bg-white p-4 shadow-sm transition-shadow hover:border-zinc-300 hover:shadow-md"
     >
       {/* Header: favicon, name, URL — identity — plus the lifecycle menu, all full width */}

@@ -509,6 +509,97 @@ implemented.
   enrich SEO Health/Opportunities/prioritization or shown in SEO Progress;
   no automatic recommendations based on traffic.
 
+### MARKO Insights (`src/lib/reporting/markoInsights.ts`)
+- Deterministic interpretation layer over data that already exists —
+  `SeoHealthReport` (issues, priority/category, affected pages, pages
+  analyzed) and `SeoChangeReport` (resolved/new/remaining, with the
+  existing newly-analyzed-page protection). No AI/LLM call, no external
+  API, and explicitly **no Search Console dependency** — GSC performance
+  data still does not factor into prioritization anywhere (see the GSC
+  milestone above).
+- Three insight types, capped at 5 total, ranked by priority then affected-
+  page count (deterministic tie-break by insight id): **PRIORITY** (the
+  single highest-priority current finding), **COVERAGE** (a different
+  finding affecting ≥50% of analyzed pages, `PREVALENCE_THRESHOLD_RATIO`),
+  and **RECENT CHANGE** (resolved-count / genuinely-new-count insights, plus
+  a single "remains widespread" pick for an issue persisting ≥50% across
+  both the previous and latest analysis — only shown when a comparable
+  previous run exists). Each issue type is claimed by at most one insight
+  (a widespread issue that's also the top-priority pick isn't restated as
+  both), and there's no minimum count — a clean report legitimately
+  produces zero insights rather than inventing filler.
+- Every insight's explanation states only counts/percentages/labels already
+  present in the underlying reports (e.g. "4 of 5 analyzed pages (80%) have
+  this finding") — no causal, traffic, ranking, or business-impact claims.
+- UI: `src/components/seoReport/MarkoInsightsCard.tsx` replaces the earlier
+  static placeholder, in the Site context column. Its "View affected pages"
+  action reuses the exact same `AnalysisDetailModal`
+  (`src/components/seoReport/AnalysisHistoryList.tsx`, now exported) and
+  `getCrawlRunDetail` the Analysis History column already uses for the
+  latest completed run — no new detail view, no new fetch.
+- Tests: `src/lib/reporting/markoInsights.test.ts` (12 cases) covering
+  ranking, prevalence/coverage, priority, deduplication (same issue never
+  claimed by two insight types), recent-change resolved/new, the
+  newly-analyzed-page regression-protection guarantee, the 5-insight cap,
+  and both empty-state paths.
+
+### Site slug routing (`supabase/migrations/0011_site_slugs.sql`)
+- Site detail URLs are now `/dashboard/sites/<slug>` (e.g.
+  `/dashboard/sites/techtivo`) instead of `/dashboard/sites/<uuid>` — the
+  route folder itself was renamed
+  `src/app/dashboard/sites/[siteId]/` → `.../[slug]/`. `sites.id` (uuid)
+  remains the sole internal identity/FK reference everywhere else
+  (crawl_runs, crawl_pages, crawl_issues, the Search Console property
+  association, Analysis History, MARKO Insights) — nothing about those
+  relationships changed; `slug` is purely an additional, publicly-routable
+  alias.
+- New `sites.slug` column, `not null`, unique **per organization** (not
+  globally) via `sites_organization_id_slug_key` — two different
+  organizations can each have a site slugged "techtivo".
+- Slug generation/collision handling (`base`, `base-2`, `base-3`, …) is
+  pure TypeScript (`src/lib/sites/slug.ts`: `slugify`, `resolveUniqueSlug`),
+  used by `createSite` (`src/app/dashboard/sites/actions.ts`) at creation
+  time — a best-effort pre-check against the org's existing slugs, with a
+  single retry on a `23505` unique-violation race (a narrow, documented
+  accepted race window, same posture as the existing organization
+  auto-creation race noted above). The migration has its own,
+  intentionally independent one-time SQL version of the same algorithm
+  (`slugify`/`generate_unique_site_slug` functions) used only to backfill
+  existing rows in a stable (`organization_id, created_at, id`) order —
+  frozen historical script, not living code the app depends on.
+- Route resolution: `resolveSiteBySlug`
+  (`src/app/dashboard/sites/[slug]/resolveSite.ts`) looks up the site by
+  `(organization_id, slug)` together — never slug alone — so a slug that
+  happens to collide with another organization's site can never resolve
+  into that tenant's data; RLS is unchanged and still independently
+  enforces the same boundary (defense in depth, same double-check pattern
+  `getCrawlRunDetail`/`associateSiteProperty` already use).
+- Every internal link/redirect that used to embed the site UUID now goes
+  through one shared `siteDetailPath(slug)` helper
+  (`src/lib/sites/paths.ts`): the dashboard site grid, `runSeoAnalysis`'s
+  redirects, and `associateSiteProperty`'s `revalidatePath` call.
+- No organization-slug routing, no public (unauthenticated) Site pages, no
+  redirect/alias for a renamed slug, and no slug-editing UI — none of
+  those were requested; slugs are assigned once at creation and never
+  change today.
+- Tests: `src/lib/sites/slug.test.ts` (slug generation, collision
+  handling, and a backfill-order simulation), `src/lib/sites/paths.test.ts`,
+  and `src/app/dashboard/sites/[slug]/resolveSite.test.ts` (tenant-scoped
+  resolution and — the security-critical case — that a slug never resolves
+  outside the caller's own organization).
+- **Search Console property switching removed** in the same pass: the site
+  detail page's Search Console card no longer offers "Change property" or
+  any manual property picker (`src/components/seoReport/
+  GoogleSearchConsoleCard.tsx`) — only the existing automatic exact-match
+  behavior can ever associate a property, so the data shown always belongs
+  to the property MARKO itself matched to that site. `clearSiteProperty`
+  (the Server Action backing the removed button) was deleted;
+  `clear_site_search_console_property` (its RPC) was deliberately left in
+  the database rather than dropped — unused but harmless, and dropping
+  database functions was out of scope for this pass.
+- **Not yet applied remotely** (see the "not yet applied" note on earlier
+  migrations above — same status quo, not a regression introduced here).
+
 ## Current architecture
 
 - Generic account/tenant infrastructure (`organizations`,
@@ -669,6 +760,16 @@ milestone above), but GSC data is not yet used anywhere beyond its own
 minimal test UI: it does not enrich SEO Health/Opportunities
 prioritization, does not appear in SEO Progress, and there is no
 scheduled/background sync (data is only ever fetched live, on page load).
+
+MARKO Insights (see the milestone above) is deliberately scoped to a small,
+deterministic MVP set. Explicitly deferred: Search-Console-informed
+insights (e.g. "this problem is on a page that already ranks well" — needs
+a product decision on how GSC should influence prioritization, same
+open item as above); trend insights spanning more than two analyses (only
+latest-vs-previous is compared, same limitation as Historical SEO Changes);
+per-page (rather than per-issue-type) insights; and any dismiss/snooze/
+acknowledge interaction — insights are read-only and recomputed fresh on
+every render, nothing is persisted about them.
 
 ## Next logical milestone
 

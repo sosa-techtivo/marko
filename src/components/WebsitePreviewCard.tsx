@@ -101,7 +101,7 @@ function PreviewFallback({
       >
         <SiteFavicon faviconUrl={faviconUrl} siteName={siteName} />
         <div>
-          <p className="text-sm font-medium text-zinc-700">Preview unavailable</p>
+          <p className="text-xs font-medium text-zinc-700">Preview unavailable</p>
           {reason === "blocked" && (
             <p className="mt-0.5 text-xs text-zinc-500">
               This site does not allow embedded previews.

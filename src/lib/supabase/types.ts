@@ -54,6 +54,7 @@ export type Database = {
           organization_id: string;
           name: string;
           url: string;
+          slug: string;
           favicon_url: string | null;
           archived_at: string | null;
           search_console_property_url: string | null;
@@ -65,6 +66,7 @@ export type Database = {
           organization_id: string;
           name: string;
           url: string;
+          slug: string;
           favicon_url?: string | null;
           archived_at?: string | null;
           search_console_property_url?: string | null;
@@ -76,6 +78,7 @@ export type Database = {
           organization_id?: string;
           name?: string;
           url?: string;
+          slug?: string;
           favicon_url?: string | null;
           archived_at?: string | null;
           search_console_property_url?: string | null;

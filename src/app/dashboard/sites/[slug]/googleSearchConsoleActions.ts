@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getValidAccessToken } from "@/lib/googleSearchConsole/tokens";
 import { listSearchConsoleProperties } from "@/lib/googleSearchConsole/client";
 import type { SearchConsoleProperty, SearchConsolePropertyType } from "@/lib/googleSearchConsole/propertyMatching";
+import { siteDetailPath } from "@/lib/sites/paths";
 
 export type ListPropertiesResult =
   | { ok: true; properties: SearchConsoleProperty[] }
@@ -70,10 +71,12 @@ export async function associateSiteProperty(
 
   // Tenant ownership check on top of the RPC's own (see
   // set_site_search_console_property in 0009_google_search_console.sql) —
-  // same double-check pattern as getCrawlRunDetail in actions.ts.
+  // same double-check pattern as getCrawlRunDetail in actions.ts. Also
+  // fetches `slug` — needed for revalidatePath below, since the site
+  // detail route is slug-based (see 0011_site_slugs.sql).
   const { data: site } = await supabase
     .from("sites")
-    .select("id")
+    .select("id, slug")
     .eq("id", siteId)
     .eq("organization_id", organization.id)
     .maybeSingle();
@@ -93,25 +96,6 @@ export async function associateSiteProperty(
     return { ok: false, error: "Could not save the selected property." };
   }
 
-  revalidatePath(`/dashboard/sites/${siteId}`);
-  return { ok: true };
-}
-
-export async function clearSiteProperty(siteId: string): Promise<AssociatePropertyResult> {
-  const { organization } = await requireUserAndOrganization();
-  if (!organization) return { ok: false, error: "Something went wrong. Please try again." };
-
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("clear_site_search_console_property", { site_id: siteId });
-
-  if (error) {
-    console.error("[googleSearchConsole] clear_site_search_console_property failed", {
-      code: error.code,
-      message: error.message,
-    });
-    return { ok: false, error: "Could not clear the selected property." };
-  }
-
-  revalidatePath(`/dashboard/sites/${siteId}`);
+  revalidatePath(siteDetailPath(site.slug));
   return { ok: true };
 }

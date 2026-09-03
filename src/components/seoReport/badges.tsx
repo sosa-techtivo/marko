@@ -69,7 +69,7 @@ export function CategoryBadge({ category }: { category: IssueCategory }) {
 export function SummaryStat({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-2xl font-semibold text-zinc-900">{value}</p>
+      <p className="text-xl font-semibold text-zinc-900">{value}</p>
       <p className="text-xs text-zinc-500">{label}</p>
     </div>
   );

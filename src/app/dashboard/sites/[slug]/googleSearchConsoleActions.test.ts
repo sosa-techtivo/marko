@@ -12,12 +12,14 @@ const { requireUserAndOrganization } = await import("@/lib/organizations");
 const { createClient } = await import("@/lib/supabase/server");
 const { getValidAccessToken } = await import("@/lib/googleSearchConsole/tokens");
 const { listSearchConsoleProperties } = await import("@/lib/googleSearchConsole/client");
-const { associateSiteProperty, clearSiteProperty } = await import("./googleSearchConsoleActions");
+const { revalidatePath } = await import("next/cache");
+const { associateSiteProperty } = await import("./googleSearchConsoleActions");
 
 const mockedRequireUserAndOrganization = vi.mocked(requireUserAndOrganization);
 const mockedCreateClient = vi.mocked(createClient);
 const mockedGetValidAccessToken = vi.mocked(getValidAccessToken);
 const mockedListSearchConsoleProperties = vi.mocked(listSearchConsoleProperties);
+const mockedRevalidatePath = vi.mocked(revalidatePath);
 
 type AuthResult = Awaited<ReturnType<typeof RequireUserAndOrganization>>;
 type SupabaseServerClient = Awaited<ReturnType<typeof CreateClient>>;
@@ -33,7 +35,9 @@ function authed(organization: AuthResult["organization"] = ORG): AuthResult {
  * and the .rpc() call this action file actually uses. */
 function fakeSupabase(options: { siteFound: boolean; rpcError?: { code: string; message: string } | null }) {
   const rpc = vi.fn().mockResolvedValue({ error: options.rpcError ?? null });
-  const maybeSingle = vi.fn().mockResolvedValue({ data: options.siteFound ? { id: "site-1" } : null });
+  const maybeSingle = vi
+    .fn()
+    .mockResolvedValue({ data: options.siteFound ? { id: "site-1", slug: "example-com" } : null });
   const eq2 = vi.fn().mockReturnValue({ maybeSingle });
   const eq1 = vi.fn().mockReturnValue({ eq: eq2 });
   const select = vi.fn().mockReturnValue({ eq: eq1 });
@@ -109,6 +113,8 @@ describe("associateSiteProperty — property ownership verification", () => {
       property_url: OWNED_PROPERTY.siteUrl,
       property_type: "url_prefix",
     });
+    // Revalidates the slug-based site detail path, not the site's UUID.
+    expect(mockedRevalidatePath).toHaveBeenCalledWith("/dashboard/sites/example-com");
   });
 
   it("does not call Google's property list when the connection needs reauth", async () => {
@@ -119,23 +125,5 @@ describe("associateSiteProperty — property ownership verification", () => {
 
     expect(result.ok).toBe(false);
     expect(mockedListSearchConsoleProperties).not.toHaveBeenCalled();
-  });
-});
-
-describe("clearSiteProperty — tenant/site access protection", () => {
-  it("rejects when the caller has no organization", async () => {
-    mockedRequireUserAndOrganization.mockResolvedValue(authed(null));
-    const result = await clearSiteProperty("site-1");
-    expect(result.ok).toBe(false);
-  });
-
-  it("surfaces an RPC failure (e.g. site not in the caller's organization) as a clean error", async () => {
-    mockedRequireUserAndOrganization.mockResolvedValue(authed());
-    const supabase = fakeSupabase({ siteFound: true, rpcError: { code: "P0001", message: "site not found or not in your organization" } });
-    mockedCreateClient.mockResolvedValue(supabase);
-
-    const result = await clearSiteProperty("site-1");
-
-    expect(result).toEqual({ ok: false, error: "Could not clear the selected property." });
   });
 });
