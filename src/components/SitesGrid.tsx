@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { SiteFavicon } from "@/components/SiteFavicon";
+import { SiteMenu } from "@/components/SiteMenu";
 import { SITE_HEALTH_STATUS_LABELS, type SiteHealthStatus } from "@/lib/reporting/siteHealthStatus";
 
 /** A site's dashboard card, fully pre-derived server-side (page.tsx) from
@@ -14,9 +15,12 @@ export type SiteCardData = {
   url: string;
   faviconUrl: string | null;
   isBlocked: boolean;
+  isArchived: boolean;
   status: SiteHealthStatus;
   /** Combines `isBlocked`/`status` into the single value the status filter
-   * compares against — still just a label over the existing derivation. */
+   * compares against — still just a label over the existing derivation.
+   * Archived state is handled separately (see `isArchived`/the "archived"
+   * filter option below), not folded into this value. */
   filterStatus: SiteHealthStatus | "analysis_blocked";
   pagesAnalyzed: number;
   totalOpportunities: number;
@@ -61,6 +65,19 @@ function AnalysisBlockedBadge() {
     <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
       <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
       Analysis blocked
+    </span>
+  );
+}
+
+/** Same pill shape as HealthIndicator/AnalysisBlockedBadge, shown instead
+ * of either on an archived card — archiving is a lifecycle state, not a
+ * health reading, so it takes priority in the status row regardless of the
+ * site's last known health/blocked state. */
+function ArchivedBadge() {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600">
+      <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" aria-hidden="true" />
+      Archived
     </span>
   );
 }
@@ -177,13 +194,16 @@ function Stat({ label, value, emphasize }: { label: string; value: number; empha
   );
 }
 
-const STATUS_FILTER_OPTIONS: { value: "all" | SiteHealthStatus | "analysis_blocked"; label: string }[] = [
+type StatusFilterValue = "all" | SiteHealthStatus | "analysis_blocked" | "archived";
+
+const STATUS_FILTER_OPTIONS: { value: StatusFilterValue; label: string }[] = [
   { value: "all", label: "All statuses" },
   { value: "healthy", label: "Healthy" },
   { value: "needs_attention", label: "Needs attention" },
   { value: "critical", label: "Critical" },
   { value: "analysis_blocked", label: "Analysis blocked" },
   { value: "not_analyzed", label: "Not analyzed" },
+  { value: "archived", label: "Archived" },
 ];
 
 function SiteCard({ site }: { site: SiteCardData }) {
@@ -192,18 +212,25 @@ function SiteCard({ site }: { site: SiteCardData }) {
       href={`/dashboard/sites/${site.id}`}
       className="flex h-full flex-col rounded-xl border border-zinc-200 bg-white p-4 shadow-sm transition-shadow hover:border-zinc-300 hover:shadow-md"
     >
-      {/* Header: favicon, name, URL — identity only, full width */}
+      {/* Header: favicon, name, URL — identity — plus the lifecycle menu, all full width */}
       <div className="flex min-w-0 items-center gap-2.5">
         <SiteFavicon faviconUrl={site.faviconUrl} siteName={site.name} />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-zinc-900">{site.name}</p>
           <p className="truncate text-xs text-zinc-500">{site.url}</p>
         </div>
+        <SiteMenu siteId={site.id} siteName={site.name} isArchived={site.isArchived} />
       </div>
 
       {/* Status: its own row — a narrow card can't fit this next to the name reliably */}
       <div className="mt-1.5">
-        {site.isBlocked ? <AnalysisBlockedBadge /> : <HealthIndicator status={site.status} />}
+        {site.isArchived ? (
+          <ArchivedBadge />
+        ) : site.isBlocked ? (
+          <AnalysisBlockedBadge />
+        ) : (
+          <HealthIndicator status={site.status} />
+        )}
       </div>
 
       {/* Main: gauge/warning, metrics in a compact 3-col grid below */}
@@ -265,7 +292,10 @@ function SiteCard({ site }: { site: SiteCardData }) {
 
 export function SitesGrid({ sites }: { sites: SiteCardData[] }) {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | SiteHealthStatus | "analysis_blocked">("all");
+  // Default view is active sites only — "Archived" must be selected
+  // explicitly to see archived sites, and every other option (including
+  // "all") excludes them, since a lifecycle state isn't a health status.
+  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>("all");
 
   const filteredSites = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -274,7 +304,10 @@ export function SitesGrid({ sites }: { sites: SiteCardData[] }) {
         query === "" ||
         site.name.toLowerCase().includes(query) ||
         site.url.toLowerCase().includes(query);
-      const matchesStatus = statusFilter === "all" || site.filterStatus === statusFilter;
+      const matchesStatus =
+        statusFilter === "archived"
+          ? site.isArchived
+          : !site.isArchived && (statusFilter === "all" || site.filterStatus === statusFilter);
       return matchesSearch && matchesStatus;
     });
   }, [sites, search, statusFilter]);
@@ -291,9 +324,7 @@ export function SitesGrid({ sites }: { sites: SiteCardData[] }) {
         />
         <select
           value={statusFilter}
-          onChange={(event) =>
-            setStatusFilter(event.target.value as "all" | SiteHealthStatus | "analysis_blocked")
-          }
+          onChange={(event) => setStatusFilter(event.target.value as StatusFilterValue)}
           className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-primary focus:ring-2 focus:ring-primary/30 sm:w-56"
         >
           {STATUS_FILTER_OPTIONS.map((option) => (

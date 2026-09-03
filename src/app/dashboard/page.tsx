@@ -104,7 +104,7 @@ export default async function DashboardPage({
   const supabase = await createClient();
   const { data: sites } = await supabase
     .from("sites")
-    .select("id, name, url, favicon_url, created_at")
+    .select("id, name, url, favicon_url, archived_at, created_at")
     .eq("organization_id", organization.id)
     .order("created_at", { ascending: false });
 
@@ -180,6 +180,7 @@ export default async function DashboardPage({
       url: site.url,
       faviconUrl: site.favicon_url,
       isBlocked,
+      isArchived: site.archived_at !== null,
       status: health.status,
       filterStatus: isBlocked ? "analysis_blocked" : health.status,
       pagesAnalyzed: latestCompletedRun?.pages_crawled ?? 0,

@@ -55,6 +55,7 @@ export type Database = {
           name: string;
           url: string;
           favicon_url: string | null;
+          archived_at: string | null;
           created_at: string;
         };
         Insert: {
@@ -63,6 +64,7 @@ export type Database = {
           name: string;
           url: string;
           favicon_url?: string | null;
+          archived_at?: string | null;
           created_at?: string;
         };
         Update: {
@@ -71,6 +73,7 @@ export type Database = {
           name?: string;
           url?: string;
           favicon_url?: string | null;
+          archived_at?: string | null;
           created_at?: string;
         };
         Relationships: [
@@ -268,6 +271,18 @@ export type Database = {
       };
       update_site_favicon: {
         Args: { site_id: string; favicon_url: string | null };
+        Returns: undefined;
+      };
+      archive_site: {
+        Args: { site_id: string };
+        Returns: undefined;
+      };
+      restore_site: {
+        Args: { site_id: string };
+        Returns: undefined;
+      };
+      delete_site_permanently: {
+        Args: { site_id: string };
         Returns: undefined;
       };
     };

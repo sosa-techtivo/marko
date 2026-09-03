@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { SiteFavicon } from "@/components/SiteFavicon";
+import type { EmbedCheckResult } from "@/lib/preview/checkEmbeddable";
 
 // If the iframe hasn't fired `onLoad` within this window, the preview is
 // treated the same as a confirmed embedding block: the fallback renders and
@@ -9,12 +10,30 @@ import { SiteFavicon } from "@/components/SiteFavicon";
 // on screen.
 const LOAD_TIMEOUT_MS = 7_000;
 
-// Rendered at this fixed desktop size, then scaled down with CSS transform
-// to fit the card — the standard technique for a Vercel-style "mini"
-// preview, since most sites don't have a layout meant to fit a narrow
-// sidebar card at 1:1 size.
-const PREVIEW_WIDTH = 1280;
-const PREVIEW_HEIGHT = 800;
+// The full virtual desktop viewport the live site renders into, then gets
+// scaled down with CSS transform (transform-origin top-left, width/height
+// compensated by the same scale factor) to fit the card — the standard
+// technique for a Vercel-style "mini" preview. `scale` (below) is always
+// `containerWidth / PREVIEW_WIDTH`, and the wrapper's own height is that
+// exact same ratio applied to PREVIEW_HEIGHT (via the aspect-ratio class
+// just below, which is mathematically the same computation expressed in
+// CSS instead of JS) — so the *whole* PREVIEW_WIDTH x PREVIEW_HEIGHT
+// viewport always fits inside the wrapper with nothing cropped off the
+// bottom or right, at any card width.
+const PREVIEW_WIDTH = 1440;
+const PREVIEW_HEIGHT = 900;
+
+// Wrapper sizing: full width, height = width * (PREVIEW_HEIGHT /
+// PREVIEW_WIDTH) — i.e. exactly the scaled height of the iframe above, so
+// nothing is clipped. Using the CSS `aspect-ratio` property (rather than
+// setting a JS-computed pixel height from `scale`) means this is correct
+// from the very first paint, with no dependency on the ResizeObserver
+// below having measured anything yet — no 0-height flash, no mismatch.
+// Applied identically to the fallback card so neither preview state is a
+// different height. Written as a literal string, not interpolated from
+// the numeric constants above: Tailwind's build-time scanner only picks up
+// arbitrary-value classes it can find verbatim in source.
+const PREVIEW_ASPECT_RATIO_CLASS = "aspect-[1440/900]";
 
 function domainOf(url: string): string {
   try {
@@ -56,21 +75,38 @@ function PreviewChrome({
   );
 }
 
+/**
+ * `reason` distinguishes a *confirmed* framing restriction (the site's own
+ * X-Frame-Options/CSP `frame-ancestors` header, read server-side) from any
+ * other preview failure (fetch error, timeout, a client-side iframe load
+ * that never confirmed) — only the former gets the more specific
+ * "doesn't allow embedded previews" copy; everything else keeps the
+ * original generic fallback.
+ */
 function PreviewFallback({
   siteName,
   url,
   faviconUrl,
+  reason,
 }: {
   siteName: string;
   url: string;
   faviconUrl: string | null;
+  reason: "blocked" | "unavailable";
 }) {
   return (
     <PreviewChrome url={url}>
-      <div className="flex aspect-video flex-col items-center justify-center gap-3 bg-zinc-50 px-4 text-center">
+      <div
+        className={`flex ${PREVIEW_ASPECT_RATIO_CLASS} flex-col items-center justify-center gap-3 bg-zinc-50 px-4 text-center`}
+      >
         <SiteFavicon faviconUrl={faviconUrl} siteName={siteName} />
         <div>
           <p className="text-sm font-medium text-zinc-700">Preview unavailable</p>
+          {reason === "blocked" && (
+            <p className="mt-0.5 text-xs text-zinc-500">
+              This site does not allow embedded previews.
+            </p>
+          )}
           <p className="mt-0.5 text-xs text-zinc-500">{domainOf(url)}</p>
         </div>
       </div>
@@ -79,30 +115,35 @@ function PreviewFallback({
 }
 
 /**
- * Vercel-inspired mini preview of the client's live site. `canEmbed` is a
- * server-side, header-based check (see checkSiteEmbeddable) of whether the
- * site allows being framed — when it doesn't, the iframe is never mounted
- * at all and this renders the fallback directly.
+ * Vercel-inspired mini preview of the client's live site. `embedStatus` is
+ * the server-side, header-based check (see checkSiteEmbeddable) of whether
+ * the site allows being framed — when it's anything other than
+ * "embeddable", the iframe is never mounted at all and this renders the
+ * fallback directly, with "blocked" (a confirmed X-Frame-Options/CSP
+ * restriction) getting more specific copy than a generic "unavailable".
  *
- * Even when `canEmbed` is true, cross-origin restrictions mean the iframe's
- * `onLoad` can't fully distinguish "rendered fine" from some blocked/broken
- * states, so a load timeout backstops the header check: if the frame
- * doesn't report loaded in time, the fallback replaces it rather than ever
- * leaving a blank or broken iframe visible.
+ * Even when `embedStatus` is "embeddable", cross-origin restrictions mean
+ * the iframe's `onLoad` can't fully distinguish "rendered fine" from some
+ * blocked/broken state, so a load timeout backstops the header check: if
+ * the frame doesn't report loaded in time, the fallback replaces it rather
+ * than ever leaving a blank or broken iframe visible. That client-side
+ * failure is never confirmed as a framing restriction, so it always falls
+ * back to the generic "unavailable" copy, never "blocked".
  */
 export function WebsitePreviewCard({
   siteName,
   url,
   faviconUrl,
-  canEmbed,
+  embedStatus,
 }: {
   siteName: string;
   url: string;
   faviconUrl: string | null;
-  canEmbed: boolean;
+  embedStatus: EmbedCheckResult;
 }) {
-  const [status, setStatus] = useState<"loading" | "loaded" | "blocked">(
-    canEmbed ? "loading" : "blocked",
+  const canEmbed = embedStatus === "embeddable";
+  const [status, setStatus] = useState<"loading" | "loaded" | "blocked" | "unavailable">(
+    canEmbed ? "loading" : embedStatus,
   );
   // Scale factor to shrink the fixed-size iframe down to the card's actual
   // (responsive) width — measured client-side since that width isn't known
@@ -114,7 +155,10 @@ export function WebsitePreviewCard({
 
   useEffect(() => {
     if (!canEmbed) return;
-    timeoutRef.current = setTimeout(() => setStatus("blocked"), LOAD_TIMEOUT_MS);
+    // A client-side load failure/timeout was never confirmed as a framing
+    // restriction (unlike the server-side header check), so it always
+    // resolves to the generic fallback, not "blocked".
+    timeoutRef.current = setTimeout(() => setStatus("unavailable"), LOAD_TIMEOUT_MS);
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
@@ -132,16 +176,17 @@ export function WebsitePreviewCard({
     return () => observer.disconnect();
   }, [canEmbed]);
 
-  if (status === "blocked") {
-    return <PreviewFallback siteName={siteName} url={url} faviconUrl={faviconUrl} />;
+  if (status === "blocked" || status === "unavailable") {
+    return (
+      <PreviewFallback siteName={siteName} url={url} faviconUrl={faviconUrl} reason={status} />
+    );
   }
 
   return (
     <PreviewChrome url={url}>
       <div
         ref={containerRef}
-        className="relative overflow-hidden bg-zinc-50"
-        style={{ paddingTop: `${(PREVIEW_HEIGHT / PREVIEW_WIDTH) * 100}%` }}
+        className={`relative ${PREVIEW_ASPECT_RATIO_CLASS} overflow-hidden bg-zinc-50`}
       >
         {status === "loading" && (
           <div className="absolute inset-0 animate-pulse bg-zinc-100" aria-hidden="true" />
@@ -153,6 +198,13 @@ export function WebsitePreviewCard({
             sandbox="allow-scripts allow-same-origin"
             referrerPolicy="no-referrer"
             loading="lazy"
+            // Legacy but still universally honored by browsers, and unlike
+            // CSS it works even though the framed document is cross-origin
+            // (we can't inject scrollbar-hiding CSS into someone else's
+            // page): suppresses the iframe's own native scrollbar for a
+            // page taller than PREVIEW_HEIGHT, so none shows up (scaled
+            // along with everything else) inside the preview.
+            scrolling="no"
             className="pointer-events-none absolute top-0 left-0 border-0"
             style={{
               width: PREVIEW_WIDTH,
@@ -166,7 +218,7 @@ export function WebsitePreviewCard({
             }}
             onError={() => {
               if (timeoutRef.current) clearTimeout(timeoutRef.current);
-              setStatus("blocked");
+              setStatus("unavailable");
             }}
           />
         )}

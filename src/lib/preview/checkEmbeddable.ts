@@ -30,6 +30,21 @@ function isBlockingFrameAncestors(csp: string | null): boolean {
 }
 
 /**
+ * - "embeddable": no restrictive header found — an iframe attempt is safe to try.
+ * - "blocked": the site's own X-Frame-Options or CSP `frame-ancestors` header
+ *   was read and explicitly restricts framing — a *confirmed* restriction,
+ *   not a guess.
+ * - "unavailable": anything else (fetch error, timeout, SSRF-guard
+ *   rejection, ambiguous redirect, etc.) — embedding wasn't ruled out by a
+ *   real header, just not confirmed safe.
+ *
+ * The UI only shows the "this site doesn't allow embedded previews"
+ * messaging for "blocked", never for "unavailable", since the latter is not
+ * a confirmed framing restriction.
+ */
+export type EmbedCheckResult = "embeddable" | "blocked" | "unavailable";
+
+/**
  * Best-effort, header-based check for whether a client's site can be
  * embedded in an iframe here: reads the target's own X-Frame-Options / CSP
  * `frame-ancestors` response headers and nothing else — it never attempts
@@ -37,10 +52,11 @@ function isBlockingFrameAncestors(csp: string | null): boolean {
  *
  * Reuses the crawler's SSRF guard since, like the crawler, this fetches a
  * URL the client registered themselves. Fails closed: any fetch error,
- * timeout, or ambiguous header is treated as "not embeddable" so the UI
- * never has to gamble on a live iframe attempt coming back broken.
+ * timeout, or ambiguous header is treated as "unavailable" (not
+ * "embeddable") so the UI never has to gamble on a live iframe attempt
+ * coming back broken.
  */
-export async function checkSiteEmbeddable(url: string): Promise<boolean> {
+export async function checkSiteEmbeddable(url: string): Promise<EmbedCheckResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -49,12 +65,12 @@ export async function checkSiteEmbeddable(url: string): Promise<boolean> {
     try {
       currentUrl = new URL(url);
     } catch {
-      return false;
+      return "unavailable";
     }
 
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const safety = await assertSafeToFetch(currentUrl);
-      if (!safety.ok) return false;
+      if (!safety.ok) return "unavailable";
 
       let response: Response;
       try {
@@ -65,7 +81,7 @@ export async function checkSiteEmbeddable(url: string): Promise<boolean> {
           headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml" },
         });
       } catch {
-        return false;
+        return "unavailable";
       }
 
       // Headers only — the body is never needed, so it's cancelled instead
@@ -75,23 +91,23 @@ export async function checkSiteEmbeddable(url: string): Promise<boolean> {
       const isRedirect = response.status >= 300 && response.status < 400;
       if (isRedirect) {
         const location = response.headers.get("location");
-        if (!location || hop === MAX_REDIRECTS) return false;
+        if (!location || hop === MAX_REDIRECTS) return "unavailable";
         try {
           currentUrl = new URL(location, currentUrl);
         } catch {
-          return false;
+          return "unavailable";
         }
         continue;
       }
 
-      if (isBlockingFrameOptions(response.headers.get("x-frame-options"))) return false;
-      if (isBlockingFrameAncestors(response.headers.get("content-security-policy"))) return false;
-      return true;
+      if (isBlockingFrameOptions(response.headers.get("x-frame-options"))) return "blocked";
+      if (isBlockingFrameAncestors(response.headers.get("content-security-policy"))) return "blocked";
+      return "embeddable";
     }
 
-    return false;
+    return "unavailable";
   } catch {
-    return false;
+    return "unavailable";
   } finally {
     clearTimeout(timeout);
   }
