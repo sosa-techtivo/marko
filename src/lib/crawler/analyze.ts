@@ -21,7 +21,8 @@ export type CrawlIssueType =
   | "non_indexable"
   | "invalid_canonical"
   | "missing_canonical"
-  | "duplicate_canonical";
+  | "duplicate_canonical"
+  | "canonical_chain";
 
 export type CrawlIssueSeverity = "warning" | "critical";
 

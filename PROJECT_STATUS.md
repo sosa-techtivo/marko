@@ -14,9 +14,11 @@ comparison → resolved/new/remaining issues), **Milestone 5: Expanded
 Deterministic SEO Rules** (9 additional page-level and cross-page checks —
 title/meta length and duplicates, multiple H1s, missing/unexpectedly-shared
 canonicals), a **UI/UX Branding Foundation** pass (Techtivo/MARKO visual
-identity — logo, color, typography, login/header shell), and **Signup
+identity — logo, color, typography, login/header shell), **Signup
 Onboarding** (organization name captured at signup, auto-created after
-email verification). Search Console is still not implemented.
+email verification), and **Milestone 5b: Canonical Chains + Analyzer Test
+Coverage** (one additional cross-page check, plus the project's first
+automated tests). Search Console is still not implemented.
 
 ## Completed functionality
 
@@ -211,6 +213,51 @@ email verification). Search Console is still not implemented.
   applied remotely) — no new tables or columns; every new rule is derived
   from data `crawl_pages` already stores
 
+### Milestone 5b: Canonical Chains + Analyzer Test Coverage (`supabase/migrations/0007_canonical_chain_issue_type.sql`)
+- Before adding anything, the existing crawler/analyzer/taxonomy were
+  audited against a requested checklist of metadata/structure/indexability
+  checks (missing/short/long title & meta description, missing/multiple
+  H1, non-2xx, noindex, missing canonical, canonical pointing elsewhere).
+  Every item except one already existed from Milestone 2/5 — nothing in
+  that list was re-implemented or duplicated.
+- The one genuine gap: a canonical pointing to a *different* URL was only
+  ever flagged as an outright problem when the target was cross-domain
+  (`invalid_canonical`) or when 2+ *other* pages also deferred to the same
+  target (`duplicate_canonical`, cross-page). A single page whose
+  canonical points to a different, same-host URL was — correctly —
+  never flagged on its own, since that's ordinary, legitimate canonical
+  usage (pagination, tracking-param stripping, print/AMP variants, etc.)
+  and assuming otherwise would be a false positive.
+- New check: **`canonical_chain`** (Indexability, Medium) — fires when
+  page A's canonical points to another page B that *was also crawled in
+  this same run*, and B's own canonical doesn't self-reference (B defers
+  further, to a third URL, or back to A). This is a real, deterministically
+  detectable technical-SEO problem (chained canonicals aren't guaranteed
+  to be followed to their true target) distinct from both existing
+  canonical checks, computed entirely from `canonicalUrl` values
+  `analyzePage` already resolves — no new crawler fetches, no increase to
+  crawl scope (`src/lib/crawler/crossPageChecks.ts`). Like the existing
+  duplicate checks, it only considers targets that were actually crawled
+  in the same 5-page run, and excludes pages already flagged
+  `invalid_canonical` to avoid compounding an already-reported problem.
+- Schema: `crawl_issues.issue_type`'s check constraint widened for this
+  one new value (migration `0007_canonical_chain_issue_type.sql`, not yet
+  applied remotely) — no new tables/columns, same pattern as `0004`.
+- **Test infrastructure added** (there was none in the project before
+  this): `vitest` as the sole new devDependency (`npm test` → `vitest
+  run`). Chosen over Node's built-in `node:test` because this codebase's
+  internal modules use extensionless relative imports (e.g. `from
+  "./seoRules"`), which Node's native ESM/TS loader cannot resolve without
+  rewriting those imports project-wide — an unrelated, unjustified change
+  just to avoid one dependency. 36 focused tests were added:
+  `src/lib/crawler/analyze.test.ts` (every page-level check, including
+  boundary cases at the exact min/max length thresholds, the
+  bot-protection short-circuit, and same-host-but-different-URL
+  canonicals *not* being flagged) and
+  `src/lib/crawler/crossPageChecks.test.ts` (all three existing duplicate
+  checks plus the new canonical-chain check, including a two-page cycle
+  and a target outside the crawled set).
+
 ### UI/UX Branding Foundation (Techtivo/MARKO visual identity)
 - Logo/favicon: `/public/branding/techtivo-marko.png` and `favicon.ico`
   (provided assets, never generated/modified/renamed) wired through a
@@ -320,6 +367,9 @@ email verification). Search Console is still not implemented.
   can evolve without touching crawl logic. `issueTaxonomy.ts` is the one
   place category/priority are defined; both the health report and the
   change report import it rather than redefining anything.
+- Testing: `vitest` (`npm test`) covers the deterministic crawler/analyzer
+  rules only (`src/lib/crawler/*.test.ts`) — no component/integration
+  tests exist yet. Test files live alongside the modules they cover.
 - Shared UI lives in `src/components/` (currently just `MarkoLogo.tsx`,
   the app's first shared component). Brand tokens (color, font) are
   defined once in `src/app/globals.css` and consumed everywhere else via
@@ -371,10 +421,10 @@ email verification). Search Console is still not implemented.
   redirected (and to where) isn't currently collected or persisted.
   Adding that would need a `fetchPage`/schema change, which was
   deliberately out of scope for Milestone 5.
-- `duplicate_title`/`duplicate_meta_description`/`duplicate_canonical` are
-  computed only within a single crawl run's own page set (at most 5
-  pages) — they cannot detect duplicates against pages outside that run's
-  sample.
+- `duplicate_title`/`duplicate_meta_description`/`duplicate_canonical`/
+  `canonical_chain` are computed only within a single crawl run's own page
+  set (at most 5 pages) — they cannot detect duplicates/chains against
+  pages outside that run's sample.
 - The SEO report page's own visual details (health summary/opportunities/
   change cards, severity/priority/category badges, per-page table) have not
   been updated to the new Techtivo/MARKO visual identity — still on the

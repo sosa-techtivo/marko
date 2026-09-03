@@ -21,14 +21,15 @@ import {
  *  - Medium: affects click-through, distinctiveness, or index consolidation
  *    but the page still indexes normally (missing_meta_description,
  *    invalid_canonical, title_too_short/too_long, duplicate_title,
- *    duplicate_meta_description, multiple_h1, duplicate_canonical)
+ *    duplicate_meta_description, multiple_h1, duplicate_canonical,
+ *    canonical_chain)
  *  - Low: a structural best practice with the weakest ranking impact
  *    (missing_h1, meta_description_too_short/too_long, missing_canonical)
  *
- * `duplicate_canonical`'s priority (Medium) isn't from an explicit external
- * spec — it's inferred as the same tier as `invalid_canonical`, since both
- * are canonical-correctness problems and cross-page consolidation is more
- * consequential than a single missing canonical tag (Low).
+ * `duplicate_canonical`'s and `canonical_chain`'s priority (Medium) aren't
+ * from an explicit external spec — both are inferred as the same tier as
+ * `invalid_canonical`, since all three are canonical-correctness problems
+ * more consequential than a single missing canonical tag (Low).
  */
 export type IssueCategory = "technical" | "metadata" | "indexability" | "structure";
 export type IssuePriority = "high" | "medium" | "low";
@@ -147,6 +148,15 @@ export const ISSUE_TAXONOMY: Record<CrawlIssueType, IssueTaxonomyEntry> = {
       "Multiple, otherwise-distinct pages declaring the same canonical target can unexpectedly consolidate them in search results, which may not be intended.",
     recommendedAction:
       "Confirm this consolidation is intentional; if these pages should be indexed separately, correct their canonical tags.",
+  },
+  canonical_chain: {
+    category: "indexability",
+    priority: "medium",
+    label: "Canonical chain",
+    whyItMatters:
+      "This page's canonical points to another page that doesn't canonicalize to itself, instead deferring further. Search engines aren't guaranteed to follow a chain of canonicals to wherever it actually ends.",
+    recommendedAction:
+      "Point this page's canonical directly at the final, self-referencing target instead of at an intermediate page.",
   },
   missing_h1: {
     category: "structure",

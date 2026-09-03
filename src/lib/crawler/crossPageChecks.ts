@@ -91,6 +91,28 @@ export function applyCrossPageChecks(pages: AnalyzedPage[]): AnalyzedPage[] {
     }
   }
 
+  // Canonical chains: page P defers (via canonical) to another crawled page
+  // Q, but Q itself defers elsewhere instead of self-referencing — search
+  // engines are not guaranteed to follow the chain to wherever it actually
+  // terminates. Only considered for canonicals already known-valid/
+  // same-host (same `validCanonicalPages` exclusion as above), and only
+  // when the target is one of the *other* pages actually crawled in this
+  // run — a target this crawl didn't fetch isn't something MARKO can
+  // confirm chains further, so it's deliberately not flagged as a guess.
+  const crawledPageByUrl = new Map(validCanonicalPages.map((p) => [p.url, p]));
+  for (const page of validCanonicalPages) {
+    if (page.canonicalUrl === null || page.canonicalUrl === page.url) continue;
+    const target = crawledPageByUrl.get(page.canonicalUrl);
+    if (!target) continue;
+    if (target.canonicalUrl !== null && target.canonicalUrl !== target.url) {
+      addIssue(page.url, {
+        type: "canonical_chain",
+        severity: "warning",
+        message: `This page's canonical points to ${target.url}, which itself has a canonical pointing elsewhere (${target.canonicalUrl}) instead of to itself — search engines may not resolve this chain the way you intend.`,
+      });
+    }
+  }
+
   if (extraIssuesByUrl.size === 0) return pages;
 
   return pages.map((page) => {
