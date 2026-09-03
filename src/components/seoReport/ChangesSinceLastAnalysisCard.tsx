@@ -147,6 +147,12 @@ function ChangesModal({
               </p>
               <p className="text-xs text-zinc-500">Pages with issues</p>
             </div>
+            {changeReport.summary.newlyAnalyzedPageCount > 0 && (
+              <SummaryStat
+                label="Newly analyzed pages"
+                value={changeReport.summary.newlyAnalyzedPageCount}
+              />
+            )}
           </div>
 
           {changeReport.summary.excludedPreviousIssueCount > 0 && (
@@ -175,6 +181,18 @@ function ChangesModal({
             issues={changeReport.remaining}
             emptyText="No issues remained unchanged since the previous analysis."
           />
+
+          {/* Kept separate from "New" — these findings are on pages MARKO
+              is successfully analyzing for the first time (or for the
+              first time since a previous failure), not regressions, so
+              they must never be reported as new issues. */}
+          {changeReport.summary.newlyAnalyzedPageCount > 0 && (
+            <ChangeSection
+              title="Newly analyzed"
+              issues={changeReport.newlyAnalyzed}
+              emptyText="No findings on newly analyzed pages."
+            />
+          )}
         </div>
       </div>
     </div>
@@ -210,7 +228,10 @@ export function ChangesSinceLastAnalysisCard({
 
   const totalDetailCount =
     changeReport.status === "compared"
-      ? changeReport.resolved.length + changeReport.newIssues.length + changeReport.remaining.length
+      ? changeReport.resolved.length +
+        changeReport.newIssues.length +
+        changeReport.remaining.length +
+        changeReport.newlyAnalyzed.length
       : 0;
 
   return (
@@ -242,6 +263,12 @@ export function ChangesSinceLastAnalysisCard({
               </p>
               <p className="text-xs text-zinc-500">Pages with issues</p>
             </div>
+            {changeReport.summary.newlyAnalyzedPageCount > 0 && (
+              <SummaryStat
+                label="Newly analyzed pages"
+                value={changeReport.summary.newlyAnalyzedPageCount}
+              />
+            )}
           </div>
 
           {changeReport.summary.excludedPreviousIssueCount > 0 && (

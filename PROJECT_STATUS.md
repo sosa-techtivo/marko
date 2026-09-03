@@ -423,11 +423,108 @@ implemented.
   fallback path now only ever calls the plain RPC, which has no
   session/cookie side effects.
 
+### Google Search Console Integration Foundation (`supabase/migrations/0009_google_search_console.sql`)
+- **Google OAuth connection, org-level**: `src/app/dashboard/google/connect/route.ts`
+  starts the flow (CSRF `state` in an httpOnly cookie, `access_type=offline`
+  + `prompt=consent` so a refresh token is always issued);
+  `src/app/auth/google/callback/route.ts` validates `state`, exchanges the
+  code for tokens, and persists them. Scope is the single minimum
+  read-only one: `https://www.googleapis.com/auth/webmasters.readonly`
+  (`src/lib/googleSearchConsole/config.ts`). The connection belongs to the
+  organization, not a specific site or user — one Google account per org.
+- **Token storage/security**: new `google_connections` table holds the
+  refresh/access tokens. It intentionally has no grants or RLS policies
+  for `authenticated`/`anon` at all — this project has "Automatically
+  expose new tables" disabled, so simply never granting access means
+  PostgREST (and therefore every browser-side and RLS-scoped server-side
+  call) cannot reach it under any policy. The only access path is
+  Postgres's `service_role`
+  (`src/lib/supabase/serviceRole.ts` — a new, separate client, never
+  imported by anything client-side, gated by a non-`NEXT_PUBLIC_` env
+  var), used exclusively from
+  `src/lib/googleSearchConsole/connectionStore.ts`. A normal
+  RLS-scoped request can still learn *whether* a connection exists/is
+  healthy — never the tokens — via the security-definer
+  `get_google_connection_status()` RPC.
+- **Token refresh**: access tokens are refreshed server-side, proactively
+  (before the stored expiry, not reactively on a 401), via
+  `src/lib/googleSearchConsole/tokens.ts`. A refresh failure with
+  Google's `invalid_grant` error (the documented signal for a revoked/
+  expired refresh token) sets `needs_reauth = true` on the connection,
+  surfaced as a distinct "Reconnect required" UI state rather than a
+  generic failure or a silent retry loop.
+- **Search Console property association**: `sites` gained two nullable
+  columns (`search_console_property_url`, `search_console_property_type`)
+  rather than a new join table — a site has at most one property. Set
+  only through a narrow security-definer RPC
+  (`set_site_search_console_property`, same pattern as
+  `archive_site`/`restore_site` from Milestone 1's site lifecycle work),
+  never a general `sites` UPDATE grant. Both URL-prefix
+  (`https://example.com/`) and Domain (`sc-domain:example.com`) property
+  types are supported.
+- **Property matching**: `src/lib/googleSearchConsole/propertyMatching.ts`
+  (pure, unit-tested) only ever pre-selects a property in the picker when
+  there is exactly one unambiguous exact match (scheme-sensitive
+  URL-prefix match, or domain match ignoring a `www.` prefix) — zero or
+  multiple candidates always leave the picker for the user to choose
+  manually. Even a pre-selected match still requires an explicit "Use
+  this property" click; nothing is silently auto-saved. Saving itself
+  re-verifies (server-side, via a fresh Search Console API call) that the
+  submitted property is actually one the connected account has access to
+  before persisting — a stale or tampered client value can't be saved.
+- **Performance snapshot**: `src/lib/googleSearchConsole/dateRange.ts`
+  computes the latest available 28-day window assuming a fixed,
+  documented 3-day Search Console reporting lag (`GSC_DATA_LAG_DAYS`) —
+  today's date is never assumed to have data — plus the immediately
+  preceding comparable 28 days. `snapshot.ts` aggregates Google's
+  no-dimension `searchAnalytics.query` rows into clicks/impressions/CTR/
+  average position and computes a purely factual delta between the two
+  periods (no "improvement"/"regression" labeling — CLAUDE.md's AI Usage
+  Principles). A period with zero rows is tracked as "no data available",
+  distinct from a genuine zero.
+- **Minimal UI**: `src/components/seoReport/GoogleSearchConsoleCard.tsx`
+  (new card on the site detail page, outside the existing ROW 1 grid —
+  the existing Site Report layout was not redesigned) shows connection
+  state (Not connected / Connected / Reconnect required), a "Connect"/
+  "Reconnect" action, the property picker once connected, and the plain
+  metric readout with previous-period deltas once a property is set. No
+  charts; GSC metrics are not merged into the existing SEO Progress chart.
+- **Tests**: `src/lib/googleSearchConsole/*.test.ts` (OAuth state
+  validation, property exact/no-match/multiple-match behavior, date-range
+  math, metric aggregation, delta calculation, expired-token refresh
+  behavior) and
+  `src/app/dashboard/sites/[siteId]/googleSearchConsoleActions.test.ts`
+  (tenant/site ownership checks, property-ownership re-verification) — all
+  with Google/Supabase calls mocked, no live network/DB access, following
+  the same mocking pattern `runCrawl.test.ts` established.
+- **Environment variables** (see `.env.example`, no real secrets there):
+  `SUPABASE_SERVICE_ROLE_KEY` (server-only, bypasses RLS — see
+  `src/lib/supabase/serviceRole.ts`), `GOOGLE_OAUTH_CLIENT_ID`,
+  `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI` (must exactly
+  match an Authorized redirect URI on the Google Cloud OAuth client —
+  `http://localhost:3000/auth/google/callback` locally).
+- **Not done in this milestone** (see CLAUDE.md's explicit constraints):
+  no scheduled/background token refresh or data sync (both happen lazily,
+  on page load, driven by a real request); GSC metrics are not yet used to
+  enrich SEO Health/Opportunities/prioritization or shown in SEO Progress;
+  no automatic recommendations based on traffic.
+
 ## Current architecture
 
 - Generic account/tenant infrastructure (`organizations`,
   `organization_memberships`, `sites`, auth) is kept independent of any
   SEO-specific domain logic, so future specialist agents can share it.
+- Google Search Console logic lives entirely under
+  `src/lib/googleSearchConsole/` (OAuth client, token storage/refresh,
+  Search Console API client, property matching, date-range/snapshot math
+  — mostly small, pure, independently-testable modules, same philosophy
+  as `src/lib/crawler/`), plus the two Route Handlers that must exist
+  outside that lib (`src/app/dashboard/google/connect/route.ts`,
+  `src/app/auth/google/callback/route.ts` — Google's own redirect-based
+  OAuth flow needs real HTTP routes, not Server Actions). This is the
+  project's first use of the Supabase `service_role` key
+  (`src/lib/supabase/serviceRole.ts`) — every other table/query in the
+  project goes through the normal RLS-scoped client.
 - SEO crawl logic lives entirely under `src/lib/crawler/` (fetch, HTML
   extraction, page-level issue analysis, and cross-page issue analysis are
   separate, dependency-free, mostly pure modules) and is orchestrated only
@@ -539,23 +636,51 @@ implemented.
 - Signup only captures an organization name (validated: trimmed,
   non-empty, ≤100 characters) — no slug, business profile, or other
   fields.
+- Search Console's "latest available 28 days" assumes a fixed 3-day
+  reporting lag (`GSC_DATA_LAG_DAYS` in
+  `src/lib/googleSearchConsole/dateRange.ts`) rather than checking what
+  Google actually has processed yet — a conservative, documented
+  approximation, not a live freshness check.
+- One Google connection per organization, not per site — every site in
+  an org shares the same connected Google account (but each site has its
+  own, independently chosen, Search Console property). No UI exists to
+  disconnect a Google account or see which Google email is connected
+  (the OAuth scope used deliberately excludes email/profile access, to
+  stay at the minimum required scope).
+- No automatic/background token refresh or performance-data sync — both
+  happen lazily, triggered by an actual page load, per this milestone's
+  explicit "no scheduling/background jobs" constraint.
+- Search Console performance data is not yet used anywhere beyond its own
+  card: it doesn't factor into SEO Health, Top Opportunities, or SEO
+  Progress.
 
 ## Deferred scope (explicitly out of this checkpoint)
 
-Google Search Console/GA4/GBP integration, GEO monitoring, AI-assisted
-analysis, 0–100 SEO health scoring, full Schema.org structured-data
-*semantic* validation (only JSON parseability is checked — see Milestone
-5c), automatic structured-data/schema implementation, multi-run (more
-than two) trend reporting, ticketing, Developer Agent, auto-fixes, and
-any mock/fake analytics. See `CLAUDE.md` for the full list.
+GA4/GBP integration, GEO monitoring, AI-assisted analysis, 0–100 SEO
+health scoring, full Schema.org structured-data *semantic* validation
+(only JSON parseability is checked — see Milestone 5c), automatic
+structured-data/schema implementation, multi-run (more than two) trend
+reporting, ticketing, Developer Agent, auto-fixes, and any mock/fake
+analytics. See `CLAUDE.md` for the full list.
+
+Google Search Console itself now has an integration *foundation* (OAuth
+connection, property association, a raw performance snapshot — see the
+milestone above), but GSC data is not yet used anywhere beyond its own
+minimal test UI: it does not enrich SEO Health/Opportunities
+prioritization, does not appear in SEO Progress, and there is no
+scheduled/background sync (data is only ever fetched live, on page load).
 
 ## Next logical milestone
 
-Product feature track: Google Search Console integration — authorize
-per-site access via OAuth and use performance data (clicks/impressions/
-CTR/position) to enrich prioritization and reporting, per CLAUDE.md's
-Search Console section.
+Product feature track: use the now-connected Search Console performance
+data to actually enrich prioritization and reporting — e.g. a page with
+an SEO problem that already has real impressions/clicks is a stronger
+opportunity than one with none (per CLAUDE.md's Search Console section) —
+and/or fold GSC clicks/impressions into the SEO Progress trend view.
+Requires a product decision on exactly how GSC data should influence
+opportunity ranking before implementation (CLAUDE.md: "Any SEO health
+score must be explainable... rather than arbitrary AI judgment").
 
 UI track (independent, not blocking the above): extend the Techtivo/MARKO
-visual identity to the SEO report page itself, which the branding pass
-deliberately left untouched.
+visual identity to the SEO report page itself (including the new Search
+Console card), which the branding pass deliberately left untouched.

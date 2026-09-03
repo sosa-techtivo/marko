@@ -16,6 +16,9 @@ import { AnalyzedPagesTable } from "@/components/seoReport/AnalyzedPagesTable";
 import { AnalysisHistorySection } from "@/components/seoReport/AnalysisHistoryList";
 import { SeoProgressChart } from "@/components/seoReport/SeoProgressChart";
 import { ChangesSinceLastAnalysisCard } from "@/components/seoReport/ChangesSinceLastAnalysisCard";
+import { GoogleSearchConsoleCard } from "@/components/seoReport/GoogleSearchConsoleCard";
+import { getGoogleConnectionStatus } from "@/lib/googleSearchConsole/connectionStatus";
+import { getSiteSearchConsoleSnapshot } from "@/lib/googleSearchConsole/siteSnapshot";
 
 // The seed page fetch plus MAX_ADDITIONAL_PAGES more, fetched in small
 // concurrent batches (see FETCH_CONCURRENCY in runCrawl.ts) rather than
@@ -44,7 +47,9 @@ export default async function SiteDetailPage({
 
   const { data: site } = await supabase
     .from("sites")
-    .select("id, name, url, favicon_url")
+    .select(
+      "id, name, url, favicon_url, search_console_property_url, search_console_property_type",
+    )
     .eq("id", siteId)
     .eq("organization_id", organization.id)
     .maybeSingle();
@@ -57,6 +62,16 @@ export default async function SiteDetailPage({
   // header check runs concurrently with the Supabase queries below instead
   // of adding to their total latency.
   const embedCheckPromise = checkSiteEmbeddable(site.url);
+
+  // Search Console connection is org-level and independent of crawl
+  // history — cheap (a single RPC call, no external API call) so it's
+  // always checked. The performance snapshot itself does call the Google
+  // API, so it's only fetched when there's actually a property to query.
+  const gscConnection = await getGoogleConnectionStatus(supabase, organization.id);
+  const gscSnapshot =
+    gscConnection.connected && !gscConnection.needsReauth && site.search_console_property_url
+      ? await getSiteSearchConsoleSnapshot(organization.id, site.search_console_property_url)
+      : null;
 
   const { data: latestRun } = await supabase
     .from("crawl_runs")
@@ -293,6 +308,25 @@ export default async function SiteDetailPage({
             : "Something went wrong. Please try again."}
         </p>
       )}
+
+      {/* Independent of crawl history (a Google connection/property can be
+          set up before any SEO analysis has ever run), so this sits outside
+          the "no analysis yet" branch below rather than inside either
+          side of it. */}
+      <GoogleSearchConsoleCard
+        siteId={site.id}
+        siteUrl={site.url}
+        connection={gscConnection}
+        initialProperty={
+          site.search_console_property_url && site.search_console_property_type
+            ? {
+                url: site.search_console_property_url,
+                type: site.search_console_property_type as "url_prefix" | "domain",
+              }
+            : null
+        }
+        snapshot={gscSnapshot}
+      />
 
       {!latestRun ? (
         <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-16 text-center">

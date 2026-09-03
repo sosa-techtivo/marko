@@ -1,0 +1,27 @@
+-- MARKO: fix service_role permissions on google_connections
+--
+-- Root cause: 0009_google_search_console.sql granted NO table privileges
+-- on google_connections at all, on the mistaken assumption that
+-- service_role's RLS bypass was sufficient on its own. It isn't:
+-- service_role bypassing Row Level Security (a Postgres role attribute,
+-- `rolbypassrls`) is an entirely separate mechanism from the standard
+-- GRANT/privilege system that Postgres checks first, before RLS is ever
+-- evaluated — the same distinction 0002_grant_authenticated_table_
+-- privileges.sql already documents for the `authenticated` role. Without
+-- an explicit GRANT, service_role has no privileges on this table at all,
+-- which is exactly the observed
+-- "42501 permission denied for table google_connections".
+--
+-- Fix, deliberately narrow: grant service_role only the privileges
+-- src/lib/googleSearchConsole/connectionStore.ts's operations actually
+-- use — SELECT (getConnectionRecord), INSERT and UPDATE (upsertConnection
+-- upserts, updateAccessToken, markNeedsReauth all update). No DELETE:
+-- nothing in this project ever deletes a google_connections row.
+--
+-- anon/authenticated remain untouched by this migration — 0009 already
+-- established that they get no grants and no RLS policies on this table,
+-- and that remains exactly as it was; see the comment there and point 3
+-- in this change's own report for why that's still airtight after this
+-- grant.
+
+grant select, insert, update on public.google_connections to service_role;

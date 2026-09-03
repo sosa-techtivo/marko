@@ -56,6 +56,8 @@ export type Database = {
           url: string;
           favicon_url: string | null;
           archived_at: string | null;
+          search_console_property_url: string | null;
+          search_console_property_type: string | null;
           created_at: string;
         };
         Insert: {
@@ -65,6 +67,8 @@ export type Database = {
           url: string;
           favicon_url?: string | null;
           archived_at?: string | null;
+          search_console_property_url?: string | null;
+          search_console_property_type?: string | null;
           created_at?: string;
         };
         Update: {
@@ -74,6 +78,8 @@ export type Database = {
           url?: string;
           favicon_url?: string | null;
           archived_at?: string | null;
+          search_console_property_url?: string | null;
+          search_console_property_type?: string | null;
           created_at?: string;
         };
         Relationships: [
@@ -258,6 +264,53 @@ export type Database = {
           },
         ];
       };
+      google_connections: {
+        Row: {
+          id: string;
+          organization_id: string;
+          refresh_token: string;
+          access_token: string | null;
+          access_token_expires_at: string | null;
+          scope: string;
+          needs_reauth: boolean;
+          connected_by: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          refresh_token: string;
+          access_token?: string | null;
+          access_token_expires_at?: string | null;
+          scope: string;
+          needs_reauth?: boolean;
+          connected_by: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          organization_id?: string;
+          refresh_token?: string;
+          access_token?: string | null;
+          access_token_expires_at?: string | null;
+          scope?: string;
+          needs_reauth?: boolean;
+          connected_by?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "google_connections_organization_id_fkey";
+            columns: ["organization_id"];
+            isOneToOne: true;
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -282,6 +335,22 @@ export type Database = {
         Returns: undefined;
       };
       delete_site_permanently: {
+        Args: { site_id: string };
+        Returns: undefined;
+      };
+      get_google_connection_status: {
+        Args: { p_organization_id: string };
+        Returns: {
+          connected: boolean;
+          needs_reauth: boolean;
+          connected_at: string | null;
+        }[];
+      };
+      set_site_search_console_property: {
+        Args: { site_id: string; property_url: string; property_type: string };
+        Returns: undefined;
+      };
+      clear_site_search_console_property: {
         Args: { site_id: string };
         Returns: undefined;
       };
