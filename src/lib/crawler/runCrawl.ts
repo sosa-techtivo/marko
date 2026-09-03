@@ -18,10 +18,32 @@ import { formatBotProtectionErrorMessage } from "./botProtection";
  * MVP crawl limit: the start URL plus up to this many same-site internal
  * links found on the start page itself. Deliberately 1-level breadth-first
  * (links found on the *additional* pages are not followed) — this keeps a
- * manual, synchronous, in-request crawl small, fast, and predictable.
+ * manual, in-request crawl bounded, predictable, and (see
+ * FETCH_CONCURRENCY below) safely fast enough to fit the page's existing
+ * `maxDuration = 60` budget.
  */
-export const MAX_ADDITIONAL_PAGES = 4;
+export const MAX_ADDITIONAL_PAGES = 19;
 export const MAX_PAGES_PER_CRAWL = 1 + MAX_ADDITIONAL_PAGES;
+
+/**
+ * How many *additional* pages (never the seed page, which is always
+ * fetched alone first) are fetched at once. `fetchPage` has no shared
+ * mutable state and each call is independently SSRF-checked/timed-out, so
+ * running a small batch concurrently is safe — it's the only way to keep
+ * a 20-page crawl's worst-case wall-clock time inside the existing
+ * `maxDuration = 60` budget (see `src/app/dashboard/sites/[siteId]/page.tsx`)
+ * without shortening `fetchPage`'s existing 8s-per-page timeout (which
+ * would make genuinely-slow-but-valid pages more likely to be
+ * misreported as unreachable).
+ *
+ * Worst case with this value: the seed page (up to 8s) + ceil(19/5) = 4
+ * batches of the 8s per-fetch timeout ≈ 8 + 32 = 40s — the same worst-case
+ * total the *previous* 5-page-sequential crawl already had (5 × 8s = 40s),
+ * just spread across up to 20 pages instead of 5. Deliberately modest, not
+ * "as parallel as possible" — just enough to make the larger page cap safe
+ * within the current architecture.
+ */
+const FETCH_CONCURRENCY = 5;
 
 const NON_HTML_EXTENSIONS = [
   ".pdf",
@@ -56,7 +78,32 @@ function looksLikeNonHtmlAsset(pathname: string): boolean {
   return NON_HTML_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
-/** Same-host, http(s), non-asset links found in `html`, deduped, fragment-stripped. */
+/**
+ * Conservative, crawl-time-only URL normalization used purely to decide
+ * whether two discovered links point at "the same page" (so the same URL
+ * variant isn't crawled twice) — never a general canonicalization tool.
+ * Only two things are normalized, both near-universally safe:
+ *  - the fragment (`#...`) — never changes what's served, so it can never
+ *    distinguish two genuinely different pages;
+ *  - a single trailing slash on a *non-root* path (`/about/` -> `/about`)
+ *    — an established web convention where both forms almost always serve
+ *    the same resource.
+ * Deliberately does NOT touch query strings, casing, or anything else:
+ * those can and often do represent genuinely different content (e.g.
+ * `?page=2`, `?id=123`), so merging them would risk silently dropping
+ * distinct pages from the crawl rather than just avoiding a re-fetch.
+ */
+function normalizeForDedup(url: URL): string {
+  const normalized = new URL(url.toString());
+  normalized.hash = "";
+  if (normalized.pathname.length > 1 && normalized.pathname.endsWith("/")) {
+    normalized.pathname = normalized.pathname.slice(0, -1);
+  }
+  return normalized.toString();
+}
+
+/** Same-host, http(s), non-asset links found in `html`, deduped (after
+ * normalization) against each other. */
 function resolveInternalLinks(html: string, baseUrl: URL): string[] {
   const seen = new Set<string>();
   const results: string[] = [];
@@ -72,8 +119,7 @@ function resolveInternalLinks(html: string, baseUrl: URL): string[] {
     if (absolute.hostname !== baseUrl.hostname) continue;
     if (looksLikeNonHtmlAsset(absolute.pathname)) continue;
 
-    absolute.hash = "";
-    const normalized = absolute.toString();
+    const normalized = normalizeForDedup(absolute);
     if (seen.has(normalized)) continue;
     seen.add(normalized);
     results.push(normalized);
@@ -158,12 +204,25 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
 
   const pages: AnalyzedPage[] = [startPage];
 
+  // Compared against the *normalized* seed URL (not the raw one) so a
+  // trailing-slash-variant link back to the start page (e.g. the seed is
+  // registered as ".../blog" but a discovered link reads ".../blog/") is
+  // still recognized as "the same page" and excluded — `startPage.url`
+  // itself is left as the exact URL the site was registered with,
+  // unchanged either way.
+  const startNormalized = normalizeForDedup(parsedStart);
   const linksToFollow = internalLinks
-    .filter((link) => link !== parsedStart.toString())
+    .filter((link) => link !== startNormalized)
     .slice(0, MAX_ADDITIONAL_PAGES);
 
-  for (const link of linksToFollow) {
-    pages.push(await fetchAndAnalyze(link));
+  // Fetched in small concurrent batches (see FETCH_CONCURRENCY) rather
+  // than one at a time — `Promise.all` preserves each batch's input
+  // order, so `pages` ends up in the exact same link-discovery order a
+  // fully sequential crawl would have produced.
+  for (let i = 0; i < linksToFollow.length; i += FETCH_CONCURRENCY) {
+    const batch = linksToFollow.slice(i, i + FETCH_CONCURRENCY);
+    const analyzed = await Promise.all(batch.map((link) => fetchAndAnalyze(link)));
+    pages.push(...analyzed);
   }
 
   const faviconUrl = resolveFaviconUrl(startHtml, parsedStart);

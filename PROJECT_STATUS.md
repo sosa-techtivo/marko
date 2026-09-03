@@ -67,11 +67,14 @@ implemented.
   analysis"** button, the latest crawl's status/timestamp/summary, and a
   per-page table of results and detected issues
 - Crawl scope, deliberately conservative: the site's registered start URL
-  plus up to **4** same-site internal links found *on that start page*
-  (single hop, no recursion into secondary pages) — **5 pages per run,
+  plus up to **19** same-site internal links found *on that start page*
+  (single hop, no recursion into secondary pages) — **20 pages per run,
   max**. External domains and non-HTML assets (images, PDFs, CSS/JS, etc.)
-  are never followed. Each page fetch has a 10s timeout.
-  (`src/lib/crawler/runCrawl.ts`, `MAX_PAGES_PER_CRAWL`)
+  are never followed. Each page fetch has an 8s timeout; additional pages
+  (beyond the seed) are fetched in small concurrent batches of 5 so the
+  worst-case total crawl time (~40s) stays the same as the original 5-page
+  sequential crawl despite the larger page cap.
+  (`src/lib/crawler/runCrawl.ts`, `MAX_PAGES_PER_CRAWL`, `FETCH_CONCURRENCY`)
 - No new dependency: HTML extraction (title, meta description, canonical,
   H1, internal links, meta robots) is done with small, focused regexes in
   `src/lib/crawler/html.ts` rather than a DOM-parsing library
@@ -241,7 +244,7 @@ implemented.
   `analyzePage` already resolves — no new crawler fetches, no increase to
   crawl scope (`src/lib/crawler/crossPageChecks.ts`). Like the existing
   duplicate checks, it only considers targets that were actually crawled
-  in the same 5-page run, and excludes pages already flagged
+  in the same crawl run, and excludes pages already flagged
   `invalid_canonical` to avoid compounding an already-reported problem.
 - Schema: `crawl_issues.issue_type`'s check constraint widened for this
   one new value (migration `0007_canonical_chain_issue_type.sql`, not yet
@@ -307,6 +310,39 @@ implemented.
   `extractImages`/`extractJsonLdBlocks` against real HTML strings) plus
   24 new cases added to `src/lib/crawler/analyze.test.ts` covering both
   checks, including the specific false-positive protections above.
+
+### Milestone 5d: Expanded Crawl Coverage (5 → 20 pages, `src/lib/crawler/runCrawl.ts`)
+- `MAX_PAGES_PER_CRAWL` raised from 5 to 20 (seed page + up to 19 same-site
+  internal links, still single-hop/no recursion — unchanged crawl shape,
+  just a larger cap). No sitemap crawling, no `robots.txt` parsing, no
+  change to any issue-detection rule.
+- Additional pages (beyond the seed, which is always fetched alone first)
+  are now fetched in small concurrent batches of 5 (`FETCH_CONCURRENCY`)
+  rather than strictly one at a time, so the worst-case total crawl time
+  stays ~40s — the same worst case the old 5-page *sequential* crawl
+  already had (5 × 8s) — despite covering up to 4x more pages, keeping the
+  page's existing `maxDuration = 60` safety margin intact. `fetchPage`'s
+  existing SSRF checks, redirect handling, per-page 8s timeout, and
+  bot-protection-block semantics are all unchanged and still apply
+  per-fetch inside each batch.
+- New `normalizeForDedup` helper: crawl-time-only URL comparison that
+  strips the fragment and a single trailing slash on non-root paths before
+  deduplicating discovered links (and before excluding a link back to the
+  seed page). Deliberately does not touch query strings — those can
+  represent genuinely different pages and are never merged.
+- Reporting compatibility preserved by construction: SEO Health,
+  Opportunities, `duplicate_*`/`canonical_chain` cross-page checks, and
+  Historical Changes are all driven by whatever page set a given run
+  actually produced, so older runs recorded with 5 pages remain valid and
+  comparable — nothing assumes a fixed page count.
+- New `src/lib/crawler/runCrawl.test.ts` (12 tests, `fetchPage` mocked):
+  cap stops at `MAX_PAGES_PER_CRAWL`; external-domain links are never
+  followed; exact-duplicate and fragment/trailing-slash-variant links are
+  each crawled once; query-string variants are correctly *not* merged;
+  a self-referencing trailing-slash link back to the seed is excluded;
+  non-HTML asset URLs are skipped; a bot-protection-blocked seed page
+  fails the whole run; an unreachable or bot-protection-blocked
+  *additional* page doesn't abort the run or affect its sibling pages.
 
 ### UI/UX Branding Foundation (Techtivo/MARKO visual identity)
 - Logo/favicon: `/public/branding/techtivo-marko.png` and `favicon.ico`
@@ -443,11 +479,13 @@ implemented.
 - `sites` has no per-row UPDATE/DELETE RLS policies yet (not needed until
   those flows exist).
 - Crawl trigger is a synchronous request/response — a very slow target site
-  can make "Run SEO analysis" take up to roughly 40s (5 pages × 8s
-  per-page timeout, worst case), within the route's `maxDuration = 60`.
-  Acceptable for a manual, local-first MVP action; would need a background
-  job for a serverless production deployment with tighter platform
-  request timeouts — out of scope per "no scheduled/background crawling."
+  can make "Run SEO analysis" take up to roughly 40s worst case (the seed
+  page's 8s fetch, plus up to 19 more pages fetched in concurrent batches
+  of 5, each batch bounded by the same 8s per-page timeout), within the
+  route's `maxDuration = 60`. Acceptable for a manual, local-first MVP
+  action; would need a background job for a serverless production
+  deployment with tighter platform request timeouts — out of scope per
+  "no scheduled/background crawling."
 - No `robots.txt` fetch/parse: "indexability" is derived only from HTTP
   status and on-page `<meta name="robots">` / `X-Robots-Tag`.
 - Crawl history has no pruning/retention policy yet — every run is kept
@@ -473,7 +511,7 @@ implemented.
   deliberately out of scope for Milestone 5.
 - `duplicate_title`/`duplicate_meta_description`/`duplicate_canonical`/
   `canonical_chain` are computed only within a single crawl run's own page
-  set (at most 5 pages) — they cannot detect duplicates/chains against
+  set (at most 20 pages) — they cannot detect duplicates/chains against
   pages outside that run's sample.
 - `images_missing_alt`'s "meaningful image" heuristic is deliberately
   narrow and purely structural (role/aria-hidden/declared ~1x1 size) — it

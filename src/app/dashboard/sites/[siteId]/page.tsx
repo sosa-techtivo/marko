@@ -4,33 +4,26 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUserAndOrganization } from "@/lib/organizations";
 import { runSeoAnalysis } from "./actions";
 import { buildSeoHealthReport } from "@/lib/reporting/seoHealthReport";
-import { buildSeoChangeReport, type ChangedIssue } from "@/lib/reporting/seoChangeReport";
+import { buildSeoChangeReport } from "@/lib/reporting/seoChangeReport";
 import { isBotProtectionFailureMessage } from "@/lib/crawler/botProtection";
 import { checkSiteEmbeddable } from "@/lib/preview/checkEmbeddable";
 import { WebsitePreviewCard } from "@/components/WebsitePreviewCard";
 import { SiteHealthGauge, HealthIndicator } from "@/components/SitesGrid";
 import { deriveSiteHealthSummary } from "@/lib/reporting/siteHealthStatus";
-import { StatusBadge, SummaryStat, PriorityBadge, CategoryBadge } from "@/components/seoReport/badges";
+import { StatusBadge, SummaryStat } from "@/components/seoReport/badges";
 import { OpportunitiesList } from "@/components/seoReport/OpportunitiesList";
 import { AnalyzedPagesTable } from "@/components/seoReport/AnalyzedPagesTable";
 import { AnalysisHistorySection } from "@/components/seoReport/AnalysisHistoryList";
 import { SeoProgressChart } from "@/components/seoReport/SeoProgressChart";
+import { ChangesSinceLastAnalysisCard } from "@/components/seoReport/ChangesSinceLastAnalysisCard";
 
-// Worst case is MAX_PAGES_PER_CRAWL sequential page fetches, each bounded by
-// fetchPage's own per-page timeout; this gives Vercel's default 10s function
-// timeout enough headroom to not cut a legitimate crawl short.
+// The seed page fetch plus MAX_ADDITIONAL_PAGES more, fetched in small
+// concurrent batches (see FETCH_CONCURRENCY in runCrawl.ts) rather than
+// one at a time — each still bounded by fetchPage's own per-page timeout.
+// Worst case ≈ 40s (see runCrawl.ts's FETCH_CONCURRENCY doc comment for
+// the exact math); this gives Vercel's default 10s function timeout
+// enough headroom to not cut a legitimate crawl short.
 export const maxDuration = 60;
-
-function ChangedIssueRow({ issue }: { issue: ChangedIssue }) {
-  return (
-    <li className="flex flex-wrap items-center gap-1.5 py-1 text-xs">
-      <PriorityBadge priority={issue.priority} />
-      <CategoryBadge category={issue.category} />
-      <span className="font-medium text-zinc-900">{issue.label}</span>
-      <span className="max-w-xs truncate text-zinc-500">{issue.url}</span>
-    </li>
-  );
-}
 
 export default async function SiteDetailPage({
   params,
@@ -410,84 +403,10 @@ export default async function SiteDetailPage({
             )}
 
             {changeReport && (
-              <div className="flex h-full flex-col rounded-lg border border-zinc-200 bg-white p-4">
-                <h2 className="text-sm font-semibold text-zinc-900">Changes Since Last Analysis</h2>
-
-                {changeReport.status === "no-previous-run" ? (
-                  <p className="mt-2 text-sm text-zinc-600">
-                    No previous analysis is available for comparison yet. This is the first
-                    completed crawl for this site.
-                  </p>
-                ) : (
-                  <>
-                    <p className="mt-1 text-xs text-zinc-500">
-                      Comparing {new Date(changeReport.previousRun.startedAt).toLocaleString()} to{" "}
-                      {new Date(changeReport.latestRun.startedAt).toLocaleString()}.
-                    </p>
-
-                    <p className="mt-2 text-xs font-medium text-zinc-900">
-                      {changeSummaryMessage}
-                    </p>
-
-                    <div className="mt-2 grid grid-cols-2 gap-3">
-                      <SummaryStat label="Resolved" value={changeReport.summary.resolvedCount} />
-                      <SummaryStat label="New" value={changeReport.summary.newCount} />
-                      <SummaryStat
-                        label="Remaining"
-                        value={changeReport.summary.remainingCount}
-                      />
-                      <div className="flex flex-col gap-1">
-                        <p className="text-2xl font-semibold text-zinc-900">
-                          {changeReport.summary.previousPagesWithIssues} →{" "}
-                          {changeReport.summary.currentPagesWithIssues}
-                        </p>
-                        <p className="text-xs text-zinc-500">Pages with issues</p>
-                      </div>
-                    </div>
-
-                    {changeReport.summary.excludedPreviousIssueCount > 0 && (
-                      <p className="mt-2 text-xs text-zinc-500">
-                        {changeReport.summary.excludedPreviousIssueCount} previously-flagged issue
-                        {changeReport.summary.excludedPreviousIssueCount === 1 ? "" : "s"} on page
-                        {changeReport.summary.excludedPreviousIssueCount === 1 ? "" : "s"} not
-                        successfully re-analyzed in this crawl{" "}
-                        {changeReport.summary.excludedPreviousIssueCount === 1 ? "is" : "are"}{" "}
-                        excluded from this comparison — not counted as resolved.
-                      </p>
-                    )}
-
-                    {/* Only New and Resolved are listed in detail — Remaining
-                        findings are already covered by Top Opportunities /
-                        the Analysis History modal, so repeating them here
-                        would just duplicate that list. */}
-                    {changeReport.resolved.length > 0 && (
-                      <div className="mt-3 border-t border-zinc-100 pt-2">
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          Resolved
-                        </h3>
-                        <ul className="divide-y divide-zinc-100">
-                          {changeReport.resolved.map((issue) => (
-                            <ChangedIssueRow key={`${issue.issueType}-${issue.url}`} issue={issue} />
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {changeReport.newIssues.length > 0 && (
-                      <div className="mt-3 border-t border-zinc-100 pt-2">
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          New
-                        </h3>
-                        <ul className="divide-y divide-zinc-100">
-                          {changeReport.newIssues.map((issue) => (
-                            <ChangedIssueRow key={`${issue.issueType}-${issue.url}`} issue={issue} />
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+              <ChangesSinceLastAnalysisCard
+                changeReport={changeReport}
+                changeSummaryMessage={changeSummaryMessage}
+              />
             )}
           </div>
 
