@@ -3,6 +3,8 @@ import {
   extractCanonical,
   extractFirstH1,
   extractH1Count,
+  extractImages,
+  extractJsonLdBlocks,
   extractLinkHrefs,
   extractMetaContent,
   extractTitle,
@@ -94,6 +96,8 @@ async function fetchAndAnalyze(url: string): Promise<AnalyzedPage> {
     h1: html !== null ? extractFirstH1(html) : null,
     h1Count: html !== null ? extractH1Count(html) : 0,
     internalLinkCount: html !== null ? resolveInternalLinks(html, new URL(url)).length : 0,
+    images: html !== null ? extractImages(html) : [],
+    jsonLdBlocks: html !== null ? extractJsonLdBlocks(html) : [],
   });
 }
 
@@ -148,6 +152,8 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
     h1: extractFirstH1(startHtml),
     h1Count: extractH1Count(startHtml),
     internalLinkCount: internalLinks.length,
+    images: extractImages(startHtml),
+    jsonLdBlocks: extractJsonLdBlocks(startHtml),
   });
 
   const pages: AnalyzedPage[] = [startPage];

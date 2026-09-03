@@ -16,9 +16,12 @@ title/meta length and duplicates, multiple H1s, missing/unexpectedly-shared
 canonicals), a **UI/UX Branding Foundation** pass (Techtivo/MARKO visual
 identity — logo, color, typography, login/header shell), **Signup
 Onboarding** (organization name captured at signup, auto-created after
-email verification), and **Milestone 5b: Canonical Chains + Analyzer Test
+email verification), **Milestone 5b: Canonical Chains + Analyzer Test
 Coverage** (one additional cross-page check, plus the project's first
-automated tests). Search Console is still not implemented.
+automated tests), and **Milestone 5c: Image Alt & Structured Data Checks**
+(the two remaining on-page areas from `CLAUDE.md`'s MVP scope — image alt
+coverage and JSON-LD parseability). Search Console is still not
+implemented.
 
 ## Completed functionality
 
@@ -258,6 +261,53 @@ automated tests). Search Console is still not implemented.
   checks plus the new canonical-chain check, including a two-page cycle
   and a target outside the crawled set).
 
+### Milestone 5c: Image Alt & Structured Data Checks (`supabase/migrations/0008_image_alt_structured_data_issue_types.sql`)
+- Two new deterministic, page-level checks, filling the last two on-page
+  areas `CLAUDE.md`'s MVP scope names that weren't covered by Milestone
+  5/5b (image alt coverage, structured-data detection/validation —
+  automatic schema *implementation* remains explicitly out of scope):
+  | issue_type | category | priority | check |
+  |---|---|---|---|
+  | `images_missing_alt` | Structure | Low | 1+ "meaningful" `<img>` on the page has no `alt` attribute at all |
+  | `invalid_structured_data` | Technical | Low | 1+ `<script type="application/ld+json">` block isn't parsable as a JSON object/array |
+- **Image alt**: `alt=""` is treated as a deliberate "this image is
+  decorative" signal and is never flagged — only a fully *absent* `alt`
+  attribute is considered. Of those, a small set of structural signals
+  (`role="presentation"`/`"none"`, `aria-hidden="true"`, or an explicitly
+  declared ~1x1 tracking-pixel size) are excluded from counting as
+  "meaningful," so a missing `alt` there isn't flagged either — no
+  guessing about an image's actual visual content, only what the HTML
+  itself already declares. One finding per page (not one per image):
+  the message states how many images on that page are affected, so a
+  page with several missing-alt images still produces exactly one
+  opportunity card, consistent with how every other per-page check
+  already groups (`src/lib/crawler/html.ts`'s new `extractImages`,
+  `src/lib/crawler/analyze.ts`'s `isStructurallyDecorative`).
+- **Structured data**: only checks that each JSON-LD script's content is
+  non-empty, parses as JSON, and the parsed value is an object or array
+  (the only shapes JSON-LD can legally take) — deliberately *not* full
+  Schema.org semantic validation (no `@context`/`@type`/property-shape
+  checking) and no external Rich Results/validator API call. Same
+  one-finding-per-page grouping as image alt: a page with several JSON-LD
+  blocks and one broken one gets a single finding naming how many of how
+  many are affected (`src/lib/crawler/html.ts`'s new `extractJsonLdBlocks`,
+  `src/lib/crawler/analyze.ts`'s `isParsableJsonLd`).
+- Both checks reuse the exact same architecture as every prior rule: raw,
+  dependency-free regex extraction in `html.ts`, interpretation/flagging
+  in `analyzePage` (`analyze.ts`), classification in `ISSUE_TAXONOMY`. No
+  new crawler fetches, no crawl-limit change, no changes to
+  `seoHealthReport.ts`/`seoChangeReport.ts` — both are driven entirely by
+  `ISSUE_TAXONOMY` membership, so the new types participate in SEO Health,
+  Top Opportunities, SEO progress, and Historical Changes automatically.
+- Schema: `crawl_issues.issue_type`'s check constraint widened for these
+  two new values (migration `0008_image_alt_structured_data_issue_types.sql`,
+  not yet applied remotely) — no new tables/columns.
+- Test coverage extended: `src/lib/crawler/html.test.ts` (new — the
+  project's first tests for the raw HTML-extraction layer itself:
+  `extractImages`/`extractJsonLdBlocks` against real HTML strings) plus
+  24 new cases added to `src/lib/crawler/analyze.test.ts` covering both
+  checks, including the specific false-positive protections above.
+
 ### UI/UX Branding Foundation (Techtivo/MARKO visual identity)
 - Logo/favicon: `/public/branding/techtivo-marko.png` and `favicon.ico`
   (provided assets, never generated/modified/renamed) wired through a
@@ -425,6 +475,18 @@ automated tests). Search Console is still not implemented.
   `canonical_chain` are computed only within a single crawl run's own page
   set (at most 5 pages) — they cannot detect duplicates/chains against
   pages outside that run's sample.
+- `images_missing_alt`'s "meaningful image" heuristic is deliberately
+  narrow and purely structural (role/aria-hidden/declared ~1x1 size) — it
+  cannot know an image is decorative from its actual visual content (e.g.
+  a background-style spacer GIF at a normal declared size, or a CSS
+  `background-image` used for a meaningful photo, which this check
+  doesn't see at all since it only inspects `<img>` elements).
+- `invalid_structured_data` only checks JSON parseability/shape, never
+  Schema.org correctness — a JSON-LD block that parses fine but has the
+  wrong `@type`, missing required properties, or otherwise wouldn't
+  qualify for a specific rich result is not detected (that would need
+  either a bundled Schema.org validator or an external API call, both out
+  of scope here).
 - The SEO report page's own visual details (health summary/opportunities/
   change cards, severity/priority/category badges, per-page table) have not
   been updated to the new Techtivo/MARKO visual identity — still on the
@@ -443,9 +505,11 @@ automated tests). Search Console is still not implemented.
 ## Deferred scope (explicitly out of this checkpoint)
 
 Google Search Console/GA4/GBP integration, GEO monitoring, AI-assisted
-analysis, 0–100 SEO health scoring, structured-data validation, multi-run
-(more than two) trend reporting, ticketing, Developer Agent, auto-fixes,
-and any mock/fake analytics. See `CLAUDE.md` for the full list.
+analysis, 0–100 SEO health scoring, full Schema.org structured-data
+*semantic* validation (only JSON parseability is checked — see Milestone
+5c), automatic structured-data/schema implementation, multi-run (more
+than two) trend reporting, ticketing, Developer Agent, auto-fixes, and
+any mock/fake analytics. See `CLAUDE.md` for the full list.
 
 ## Next logical milestone
 

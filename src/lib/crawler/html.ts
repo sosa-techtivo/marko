@@ -99,3 +99,50 @@ export function extractLinkHrefs(html: string): string[] {
   }
   return hrefs;
 }
+
+/** Raw per-<img> attribute data — deliberately unclassified here (whether
+ * a given image counts as "meaningful" is a judgment call for analyze.ts,
+ * not something HTML extraction should decide). `hasAlt` distinguishes an
+ * absent `alt` attribute (`getAttr` returns null) from a present-but-empty
+ * one (`alt=""`, a deliberate "this image is decorative" signal) — the two
+ * cases callers must never conflate. */
+export type ExtractedImage = {
+  hasAlt: boolean;
+  altText: string | null;
+  role: string | null;
+  ariaHidden: string | null;
+  width: string | null;
+  height: string | null;
+};
+
+export function extractImages(html: string): ExtractedImage[] {
+  return findTags(html, "img").map((tag) => {
+    const altText = getAttr(tag, "alt");
+    return {
+      hasAlt: altText !== null,
+      altText,
+      role: getAttr(tag, "role"),
+      ariaHidden: getAttr(tag, "aria-hidden"),
+      width: getAttr(tag, "width"),
+      height: getAttr(tag, "height"),
+    };
+  });
+}
+
+/**
+ * Raw text content of every `<script type="application/ld+json">` block —
+ * intentionally *not* run through `cleanText`/entity-decoding like other
+ * extractors here: script content is raw JSON text, not HTML, so decoding
+ * it would risk corrupting otherwise-valid JSON. Parsing/validity is left
+ * to analyze.ts; this only locates and returns the raw blocks.
+ */
+export function extractJsonLdBlocks(html: string): string[] {
+  const blocks: string[] = [];
+  const re =
+    /<script\b[^>]*\btype\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script\s*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html)) !== null) {
+    blocks.push(match[1]);
+  }
+  return blocks;
+}

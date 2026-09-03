@@ -1,4 +1,5 @@
 import type { FetchedPage } from "./fetchPage";
+import type { ExtractedImage } from "./html";
 import {
   META_DESCRIPTION_MAX_LENGTH,
   META_DESCRIPTION_MIN_LENGTH,
@@ -22,7 +23,9 @@ export type CrawlIssueType =
   | "invalid_canonical"
   | "missing_canonical"
   | "duplicate_canonical"
-  | "canonical_chain";
+  | "canonical_chain"
+  | "images_missing_alt"
+  | "invalid_structured_data";
 
 export type CrawlIssueSeverity = "warning" | "critical";
 
@@ -86,6 +89,59 @@ function resolveCanonical(
   }
 }
 
+// A common, deterministic tracking-pixel signature: an explicitly
+// declared 1x1-or-smaller image. These carry no visual/semantic content,
+// so a missing `alt` on one is expected, not a finding — unlike an
+// arbitrary "small" image, which could still be meaningful (an icon,
+// a small photo), this is narrow enough to avoid guessing.
+const DECORATIVE_MAX_DIMENSION_PX = 1;
+
+/**
+ * Whether an image with no `alt` attribute is expected to lack one —
+ * i.e. explicitly marked decorative/hidden by structural HTML signals
+ * alone (never a visual/AI judgment about the image's actual content).
+ * Only called for images where `hasAlt` is already false — an `alt=""`
+ * is its own, separate "intentionally decorative" signal handled by the
+ * caller, not by this function.
+ */
+function isStructurallyDecorative(image: ExtractedImage): boolean {
+  const role = image.role?.trim().toLowerCase();
+  if (role === "presentation" || role === "none") return true;
+  if (image.ariaHidden?.trim().toLowerCase() === "true") return true;
+
+  const width = image.width !== null ? Number(image.width) : null;
+  const height = image.height !== null ? Number(image.height) : null;
+  if (
+    width !== null &&
+    height !== null &&
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width <= DECORATIVE_MAX_DIMENSION_PX &&
+    height <= DECORATIVE_MAX_DIMENSION_PX
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * A JSON-LD script block is usable if it's non-empty, parses as JSON, and
+ * the parsed result is an object or array (the only shapes JSON-LD can
+ * legally take) — deliberately nothing further: no `@context`/`@type`
+ * presence check, no Schema.org vocabulary/shape validation.
+ */
+function isParsableJsonLd(rawContent: string): boolean {
+  const trimmed = rawContent.trim();
+  if (trimmed.length === 0) return false;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function analyzePage(params: {
   url: string;
   fetched: FetchedPage;
@@ -96,6 +152,8 @@ export function analyzePage(params: {
   h1: string | null;
   h1Count: number;
   internalLinkCount: number;
+  images: ExtractedImage[];
+  jsonLdBlocks: string[];
 }): AnalyzedPage {
   const {
     url,
@@ -107,6 +165,8 @@ export function analyzePage(params: {
     h1,
     h1Count,
     internalLinkCount,
+    images,
+    jsonLdBlocks,
   } = params;
 
   const issues: CrawlIssue[] = [];
@@ -212,6 +272,35 @@ export function analyzePage(params: {
         severity: "warning",
         message:
           "This page has no canonical tag. Without one, search engines must infer the authoritative URL themselves, which matters if this page is reachable through more than one URL.",
+      });
+    }
+
+    // One finding per page, not one per image: `alt=""` is treated as a
+    // deliberate "this image is decorative" signal (never flagged), and a
+    // missing `alt` is only counted against a "meaningful" image —
+    // structurally decorative ones (role="presentation"/"none",
+    // aria-hidden="true", or a declared ~1x1 tracking-pixel size) are
+    // excluded rather than blindly flagging every <img>.
+    const meaningfulMissingAltCount = images.filter(
+      (image) => !image.hasAlt && !isStructurallyDecorative(image),
+    ).length;
+    if (meaningfulMissingAltCount > 0) {
+      issues.push({
+        type: "images_missing_alt",
+        severity: "warning",
+        message: `${meaningfulMissingAltCount} image${meaningfulMissingAltCount === 1 ? "" : "s"} on this page ${meaningfulMissingAltCount === 1 ? "is" : "are"} missing alt text. (Images with alt="" are treated as intentionally decorative and are not counted here.)`,
+      });
+    }
+
+    // Same one-per-page grouping for structured data: a page with several
+    // JSON-LD blocks and one broken one gets a single finding naming how
+    // many are affected, not one card per script tag.
+    const invalidJsonLdCount = jsonLdBlocks.filter((block) => !isParsableJsonLd(block)).length;
+    if (invalidJsonLdCount > 0) {
+      issues.push({
+        type: "invalid_structured_data",
+        severity: "warning",
+        message: `${invalidJsonLdCount} of ${jsonLdBlocks.length} structured data (JSON-LD) block${jsonLdBlocks.length === 1 ? "" : "s"} on this page could not be parsed as valid JSON.`,
       });
     }
   }

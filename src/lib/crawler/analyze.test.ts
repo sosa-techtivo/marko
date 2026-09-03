@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzePage, type CrawlIssueType } from "./analyze";
 import type { FetchedPage } from "./fetchPage";
+import type { ExtractedImage } from "./html";
 import { META_DESCRIPTION_MIN_LENGTH, TITLE_MIN_LENGTH } from "./seoRules";
 
 const VALID_TITLE = "A Title That Comfortably Meets The Minimum Length";
@@ -30,6 +31,8 @@ function baseParams(overrides: Partial<Parameters<typeof analyzePage>[0]> = {}) 
     h1: "Welcome",
     h1Count: 1,
     internalLinkCount: 3,
+    images: [],
+    jsonLdBlocks: [],
     ...overrides,
   };
 }
@@ -209,5 +212,142 @@ describe("analyzePage — canonical", () => {
     );
     expect(page.canonicalUrl).toBe("https://example.com/blog/post");
     expect(issueTypes(page)).not.toContain("invalid_canonical");
+  });
+});
+
+function image(overrides: Partial<ExtractedImage> = {}): ExtractedImage {
+  return {
+    hasAlt: false,
+    altText: null,
+    role: null,
+    ariaHidden: null,
+    width: null,
+    height: null,
+    ...overrides,
+  };
+}
+
+describe("analyzePage — image alt text", () => {
+  it("flags a meaningful image with no alt attribute at all", () => {
+    const page = analyzePage(baseParams({ images: [image()] }));
+    expect(issueTypes(page)).toContain("images_missing_alt");
+    expect(page.issues.find((i) => i.type === "images_missing_alt")?.message).toContain("1 image");
+  });
+
+  it("does not flag an image that has alt text", () => {
+    const page = analyzePage(
+      baseParams({ images: [image({ hasAlt: true, altText: "A description" })] }),
+    );
+    expect(issueTypes(page)).not.toContain("images_missing_alt");
+  });
+
+  it("treats alt=\"\" as intentionally decorative and does not flag it", () => {
+    const page = analyzePage(baseParams({ images: [image({ hasAlt: true, altText: "" })] }));
+    expect(issueTypes(page)).not.toContain("images_missing_alt");
+  });
+
+  it("does not flag a structurally decorative image (role=presentation) missing alt", () => {
+    const page = analyzePage(baseParams({ images: [image({ role: "presentation" })] }));
+    expect(issueTypes(page)).not.toContain("images_missing_alt");
+  });
+
+  it("does not flag an aria-hidden image missing alt", () => {
+    const page = analyzePage(baseParams({ images: [image({ ariaHidden: "true" })] }));
+    expect(issueTypes(page)).not.toContain("images_missing_alt");
+  });
+
+  it("does not flag a 1x1 tracking-pixel-shaped image missing alt", () => {
+    const page = analyzePage(baseParams({ images: [image({ width: "1", height: "1" })] }));
+    expect(issueTypes(page)).not.toContain("images_missing_alt");
+  });
+
+  it("does not blindly flag every image — a page with no images raises nothing", () => {
+    const page = analyzePage(baseParams({ images: [] }));
+    expect(issueTypes(page)).not.toContain("images_missing_alt");
+  });
+
+  it("raises exactly one finding for multiple missing-alt images on the same page", () => {
+    const page = analyzePage(baseParams({ images: [image(), image(), image()] }));
+    const matches = page.issues.filter((i) => i.type === "images_missing_alt");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].message).toContain("3 images");
+  });
+
+  it("only counts the meaningful images among a mix of decorative and meaningful ones", () => {
+    const page = analyzePage(
+      baseParams({
+        images: [
+          image(), // meaningful, missing alt -> counted
+          image({ hasAlt: true, altText: "" }), // decorative alt="" -> not counted
+          image({ role: "presentation" }), // structurally decorative -> not counted
+          image({ hasAlt: true, altText: "Has text" }), // has alt -> not counted
+          image(), // meaningful, missing alt -> counted
+        ],
+      }),
+    );
+    const finding = page.issues.find((i) => i.type === "images_missing_alt");
+    expect(finding?.message).toContain("2 images");
+  });
+});
+
+function jsonLdObject(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+describe("analyzePage — structured data (JSON-LD)", () => {
+  it("does not flag a single valid JSON-LD block", () => {
+    const page = analyzePage(
+      baseParams({
+        jsonLdBlocks: [jsonLdObject({ "@context": "https://schema.org", "@type": "Organization" })],
+      }),
+    );
+    expect(issueTypes(page)).not.toContain("invalid_structured_data");
+  });
+
+  it("flags malformed JSON-LD that cannot be parsed", () => {
+    const page = analyzePage(baseParams({ jsonLdBlocks: ["{ this is not valid json"] }));
+    expect(issueTypes(page)).toContain("invalid_structured_data");
+  });
+
+  it("flags a structured-data script whose content is empty", () => {
+    const page = analyzePage(baseParams({ jsonLdBlocks: ["   "] }));
+    expect(issueTypes(page)).toContain("invalid_structured_data");
+  });
+
+  it("flags JSON that parses but isn't a usable JSON-LD shape (a bare string)", () => {
+    const page = analyzePage(baseParams({ jsonLdBlocks: [jsonLdObject("just a string")] }));
+    expect(issueTypes(page)).toContain("invalid_structured_data");
+  });
+
+  it("does not flag a page with no structured data at all", () => {
+    const page = analyzePage(baseParams({ jsonLdBlocks: [] }));
+    expect(issueTypes(page)).not.toContain("invalid_structured_data");
+  });
+
+  it("raises one finding (not one per block) when multiple blocks include one malformed block", () => {
+    const page = analyzePage(
+      baseParams({
+        jsonLdBlocks: [
+          jsonLdObject({ "@type": "Organization" }),
+          "{ broken",
+          jsonLdObject({ "@type": "WebSite" }),
+        ],
+      }),
+    );
+    const matches = page.issues.filter((i) => i.type === "invalid_structured_data");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].message).toContain("1 of 3");
+  });
+
+  it("does not flag when all of several JSON-LD blocks are valid", () => {
+    const page = analyzePage(
+      baseParams({
+        jsonLdBlocks: [
+          jsonLdObject({ "@type": "Organization" }),
+          jsonLdObject([{ "@type": "BreadcrumbList" }]),
+        ],
+      }),
+    );
+    expect(issueTypes(page)).not.toContain("invalid_structured_data");
   });
 });

@@ -24,7 +24,8 @@ import {
  *    duplicate_meta_description, multiple_h1, duplicate_canonical,
  *    canonical_chain)
  *  - Low: a structural best practice with the weakest ranking impact
- *    (missing_h1, meta_description_too_short/too_long, missing_canonical)
+ *    (missing_h1, meta_description_too_short/too_long, missing_canonical,
+ *    images_missing_alt, invalid_structured_data)
  *
  * `duplicate_canonical`'s and `canonical_chain`'s priority (Medium) aren't
  * from an explicit external spec — both are inferred as the same tier as
@@ -173,6 +174,24 @@ export const ISSUE_TAXONOMY: Record<CrawlIssueType, IssueTaxonomyEntry> = {
     whyItMatters:
       "Multiple H1 headings can make it unclear which heading represents the page's single main topic.",
     recommendedAction: "Use one <h1> for the page's main heading; use <h2>/<h3> for subsections.",
+  },
+  images_missing_alt: {
+    category: "structure",
+    priority: "low",
+    label: "Images missing alt text",
+    whyItMatters:
+      "Alt text lets search engines (and screen readers) understand what an image shows, and is required for the image to be eligible for image search results.",
+    recommendedAction:
+      "Add descriptive alt text to meaningful images; use alt=\"\" only for genuinely decorative images.",
+  },
+  invalid_structured_data: {
+    category: "technical",
+    priority: "low",
+    label: "Invalid structured data",
+    whyItMatters:
+      "A structured data (JSON-LD) block that isn't valid JSON is ignored by search engines, forfeiting any rich-result eligibility it was meant to provide.",
+    recommendedAction:
+      "Fix the JSON syntax in this page's structured data script(s) so they parse as valid JSON.",
   },
 };
 
