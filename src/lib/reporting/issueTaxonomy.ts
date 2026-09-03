@@ -193,6 +193,24 @@ export const ISSUE_TAXONOMY: Record<CrawlIssueType, IssueTaxonomyEntry> = {
     recommendedAction:
       "Fix the JSON syntax in this page's structured data script(s) so they parse as valid JSON.",
   },
+  redirected: {
+    category: "technical",
+    priority: "low",
+    label: "URL redirects",
+    whyItMatters:
+      "This URL doesn't respond directly — it sends visitors and search engines through one or more redirects before reaching its destination, which adds latency and means this exact address isn't what ultimately gets indexed.",
+    recommendedAction:
+      "Confirm the redirect is intentional. If links or the sitemap still reference this URL, consider updating them to point directly at the final destination.",
+  },
+  blocked_by_robots_txt: {
+    category: "indexability",
+    priority: "high",
+    label: "Blocked by robots.txt",
+    whyItMatters:
+      "The site's robots.txt disallows this page for search engine crawlers, so it can't be crawled — even though it otherwise loads successfully — which typically keeps it out of search results.",
+    recommendedAction:
+      "Confirm this page is intentionally excluded from crawling. If not, update robots.txt so it no longer disallows this path.",
+  },
 };
 
 export const CATEGORY_LABELS: Record<IssueCategory, string> = {

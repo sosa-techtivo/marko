@@ -14,6 +14,8 @@ function page(overrides: Partial<AnalyzedPage> & { url: string }): AnalyzedPage 
     internalLinkCount: 0,
     fetchError: null,
     issues: [],
+    finalUrl: overrides.url,
+    redirectCount: 0,
     ...overrides,
   };
 }
@@ -154,5 +156,58 @@ describe("applyCrossPageChecks — canonical chains", () => {
     ];
     const result = applyCrossPageChecks(pages);
     expect(issueTypesFor(result, "https://example.com/a")).not.toContain("canonical_chain");
+  });
+});
+
+describe("applyCrossPageChecks — redirect-source pages are excluded", () => {
+  it("does not flag a redirecting page as a duplicate title against its own destination", () => {
+    const pages = [
+      page({ url: "https://example.com/old", title: "Same Title", redirectCount: 1 }),
+      page({ url: "https://example.com/new", title: "Same Title" }),
+    ];
+    const result = applyCrossPageChecks(pages);
+    expect(issueTypesFor(result, "https://example.com/old")).not.toContain("duplicate_title");
+    expect(issueTypesFor(result, "https://example.com/new")).not.toContain("duplicate_title");
+  });
+
+  it("does not flag a redirecting page as a duplicate meta description", () => {
+    const pages = [
+      page({
+        url: "https://example.com/old",
+        metaDescription: "Same description",
+        redirectCount: 1,
+      }),
+      page({ url: "https://example.com/new", metaDescription: "Same description" }),
+    ];
+    const result = applyCrossPageChecks(pages);
+    expect(issueTypesFor(result, "https://example.com/old")).not.toContain(
+      "duplicate_meta_description",
+    );
+  });
+
+  it("does not let a redirecting page participate in canonical consolidation or chain checks", () => {
+    const pages = [
+      page({
+        url: "https://example.com/old",
+        canonicalUrl: "https://example.com/hub",
+        redirectCount: 1,
+      }),
+      page({ url: "https://example.com/a", canonicalUrl: "https://example.com/hub" }),
+      page({ url: "https://example.com/b", canonicalUrl: "https://example.com/hub" }),
+      page({ url: "https://example.com/hub", canonicalUrl: "https://example.com/hub" }),
+    ];
+    const result = applyCrossPageChecks(pages);
+    // The redirecting page is excluded entirely — it doesn't count toward
+    // (or receive) the duplicate_canonical threshold.
+    expect(issueTypesFor(result, "https://example.com/old")).not.toContain("duplicate_canonical");
+  });
+
+  it("still returns the redirecting page in the output, just with no extra cross-page findings", () => {
+    const pages = [
+      page({ url: "https://example.com/old", title: "Same Title", redirectCount: 1 }),
+      page({ url: "https://example.com/new", title: "Same Title" }),
+    ];
+    const result = applyCrossPageChecks(pages);
+    expect(result.map((p) => p.url)).toEqual(["https://example.com/old", "https://example.com/new"]);
   });
 });

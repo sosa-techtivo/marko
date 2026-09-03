@@ -1,5 +1,34 @@
 # MARKO — Project Status
 
+## MVP status
+
+**AGREED PHASE 1 SEO MVP REQUIREMENTS: MET.**
+
+Every capability named in `CLAUDE.md`'s Confirmed MVP Scope — multi-tenant
+account foundation, site onboarding, website crawl, technical/on-page SEO
+diagnostics, SEO health & prioritized opportunities, MARKO Insights,
+historical analysis/before-after changes/progress over time, Search Console
+connection with a real performance snapshot, and client-facing
+reporting — is implemented, deterministic (no AI/LLM in the analysis
+pipeline, verified), and demonstrated end-to-end against real production
+sites (Techtivo, LendingPoint.com) with real persisted data, not mocked or
+fabricated.
+
+This verdict followed a dedicated final requirements audit that classified
+every named requirement individually (DONE/PARTIAL/DEFERRED/FUTURE/NOT
+IMPLEMENTED) against `CLAUDE.md`'s own text — not against the longer-term
+MARKO/AI-CMO vision, which was never part of this MVP's agreed scope. The
+handful of PARTIAL/NOT IMPLEMENTED items found (sitemap.xml crawling, Open
+Graph/social metadata, full H2–H6 heading-hierarchy validation,
+internal-linking-structure analysis beyond a raw count, Search Console
+per-query/per-page dimensions, Search-Console-informed prioritization, and
+site name/URL field editing) are real, bounded gaps against `CLAUDE.md`'s
+text, each independently confirmed absent in the codebase — none of them
+was ever part of the committed MVP, and none blocks demonstrating the core
+product loop: Website → Analysis → Findings → Opportunities →
+Recommendations → Reporting → Measurable Progress. See "Known limitations"
+and "Deferred scope" below for the complete, itemized list.
+
 ## Current MVP objective
 
 Per `CLAUDE.md`, the confirmed MVP is an SEO analysis/reporting product for
@@ -20,8 +49,12 @@ email verification), **Milestone 5b: Canonical Chains + Analyzer Test
 Coverage** (one additional cross-page check, plus the project's first
 automated tests), and **Milestone 5c: Image Alt & Structured Data Checks**
 (the two remaining on-page areas from `CLAUDE.md`'s MVP scope — image alt
-coverage and JSON-LD parseability). Search Console is still not
-implemented.
+coverage and JSON-LD parseability), and **Milestone 6: robots.txt Blocking
+Detection + Redirect Transparency** (the two REQUIRED gaps from an MVP
+coverage audit — a page disallowed by robots.txt, and a page reachable only
+via redirect, are both now detected and reported). Search Console is
+implemented as a connection/property/snapshot foundation but does not yet
+enrich SEO prioritization.
 
 ## Completed functionality
 
@@ -202,14 +235,10 @@ implemented.
   when **2 or more** other, distinct pages defer to the same target — one
   duplicate page deferring to one canonical page is normal, expected
   canonical usage and is not flagged
-- A redirect-based finding was considered and explicitly **not**
-  implemented: `fetchPage.ts` resolves redirects internally and only ever
-  returns the final response, so no redirect/final-URL data is currently
-  collected or persisted. Adding one would require expanding `fetchPage`'s
-  return contract and a new `crawl_pages` column just to support it, which
-  was out of scope per the milestone brief. No other robots-directive
-  signal beyond the existing `non_indexable` (noindex) check was reliably
-  derivable from already-collected data.
+- A redirect-based finding and a robots.txt-based finding were both
+  considered here and deliberately deferred at the time (out of scope for
+  this milestone's brief) — both were later implemented as required gaps
+  in Milestone 6 (see below): `redirected` and `blocked_by_robots_txt`.
 - All 9 new types automatically participate in SEO Health, Top
   Opportunities, and Historical Changes with no code changes to
   `seoHealthReport.ts` or `seoChangeReport.ts` — both are driven entirely
@@ -304,7 +333,7 @@ implemented.
   Top Opportunities, SEO progress, and Historical Changes automatically.
 - Schema: `crawl_issues.issue_type`'s check constraint widened for these
   two new values (migration `0008_image_alt_structured_data_issue_types.sql`,
-  not yet applied remotely) — no new tables/columns.
+  applied remotely) — no new tables/columns.
 - Test coverage extended: `src/lib/crawler/html.test.ts` (new — the
   project's first tests for the raw HTML-extraction layer itself:
   `extractImages`/`extractJsonLdBlocks` against real HTML strings) plus
@@ -597,8 +626,122 @@ implemented.
   `clear_site_search_console_property` (its RPC) was deliberately left in
   the database rather than dropped — unused but harmless, and dropping
   database functions was out of scope for this pass.
-- **Not yet applied remotely** (see the "not yet applied" note on earlier
-  migrations above — same status quo, not a regression introduced here).
+- **Applied remotely** (confirmed via `supabase migration list --linked`
+  during the Milestone 6 QA pass below — all migrations through `0012` are
+  applied to the linked project).
+
+### Milestone 6: robots.txt Blocking Detection + Redirect Transparency (`supabase/migrations/0012_robots_txt_and_redirect_transparency.sql`)
+- Follows a read-only MVP coverage audit that classified every crawler/
+  analysis gap as REQUIRED/SUGGESTED/FUTURE against `CLAUDE.md`'s named
+  crawl scope. Only the two REQUIRED items — both risking a misleadingly
+  "all clear" report — were implemented; every SUGGESTED/FUTURE item
+  remains deliberately unimplemented.
+- **robots.txt blocking detection** (`src/lib/crawler/robotsTxt.ts`, new):
+  fetches `/robots.txt` once per crawl (in parallel with the seed page
+  fetch), parses `User-agent`/`Allow`/`Disallow` groups, and evaluates
+  blocking per crawled page path against the `googlebot`-applicable group
+  (an explicit `googlebot` group fully overrides `*` — never merged, per
+  spec) using longest-matching-prefix-wins (`*`/`$` pattern support; a
+  length tie resolves to Allow). New `blocked_by_robots_txt` issue
+  (Indexability, High/critical) fires only on an otherwise-successful page.
+  **False-positive protection**: every inconclusive outcome — missing
+  robots.txt (404), network/timeout failure, a non-200/404 status, a
+  redirected robots.txt (never followed — a deliberate, documented
+  simplification), or no group applicable to `googlebot` — collapses to a
+  single `group: null` result, and `group: null` structurally can never
+  block anything. Evidence of the fetch itself (`robots_txt_status`,
+  `robots_txt_fetch_error`) is persisted on `crawl_runs` for transparency,
+  independent of whether blocking was ever applied.
+- **Redirect transparency**: `fetchPage.ts`'s `FetchedPage` now carries
+  `finalUrl`/`redirectCount` (threaded through every return path, success
+  and error alike); `analyze.ts` copies both onto `AnalyzedPage` and raises
+  a new `redirected` issue (Technical, Low/warning, purely factual — no
+  judgment about whether the redirect is a "problem") whenever an
+  otherwise-successful page took 1+ hops. A redirect that fails outright
+  (a loop, or exceeding the existing 3-hop limit) is still only reported as
+  `http_error`, never double-counted as `redirected` too.
+- **Cross-page false-positive protection**: `crossPageChecks.ts` excludes
+  any page with `redirectCount > 0` from all four duplicate/consolidation
+  checks (title, meta description, canonical-duplicate, canonical-chain) —
+  a redirecting page has no independent content of its own, so comparing it
+  would produce a false "duplicate"/"chain" finding against the very page
+  it redirects to. The page is still returned in the crawl's output and
+  still carries its own `redirected` finding; it just never contributes to
+  or receives a cross-page finding.
+- Both new issue types required zero changes to `seoHealthReport.ts`,
+  `seoChangeReport.ts`, `markoInsights.ts`, or any badge/table component —
+  all are driven entirely by `ISSUE_TAXONOMY` membership (confirmed, not
+  assumed), consistent with every prior milestone's rule additions.
+- Schema: `crawl_runs` gained nullable `robots_txt_status`/
+  `robots_txt_fetch_error`; `crawl_pages` gained nullable `final_url` and
+  `redirect_count` (`not null default 0`); `crawl_issues.issue_type`'s
+  check constraint widened for the two new values — all additive/nullable,
+  same pattern as `0004`/`0007`/`0008` (migration
+  `0012_robots_txt_and_redirect_transparency.sql`, **applied remotely** —
+  confirmed via `information_schema`/`pg_constraint` during the Milestone 6
+  QA pass below).
+- Tests: `src/lib/crawler/robotsTxt.test.ts` (new — group parsing/
+  precedence, pattern matching incl. `*`/`$`/tie-break, and every fetch
+  outcome: missing, permissive, full-site block, path-specific block,
+  malformed/unreachable, googlebot-overrides-wildcard); extended
+  `analyze.test.ts` (redirected/blocked_by_robots_txt raised and *not*
+  double-counted alongside `http_error`), `crossPageChecks.test.ts`
+  (redirect-source exclusion from all four checks), and `runCrawl.test.ts`
+  (end-to-end robots.txt blocking with the fetch mocked but real parsing/
+  matching, inconclusive-fetch-never-blocks, and redirect evidence flowing
+  through to the final `AnalyzedPage`).
+
+#### Milestone 6 QA pass (Phase 1 MVP end-to-end audit)
+- Precondition confirmed: migration `0012` (and all migrations through it)
+  applied to the linked project; live schema (`information_schema`,
+  `pg_constraint`) matches code exactly.
+- Real fresh crawls run against real production sites (Techtivo,
+  LendingPoint.com, plus three existing fixture sites — a bot-protection
+  case and two known-issue test pages) via the actual RLS-scoped write path
+  (a minted real user session, not a service-role bypass — `service_role`
+  deliberately has no grants on crawl_runs/crawl_pages/crawl_issues in this
+  project). Reporting consistency (health summary math, opportunities
+  page-count totals, change-report new/resolved/remaining, MARKO Insights
+  dedup/cap) was verified programmatically against the persisted rows, not
+  just eyeballed.
+- **Defect found and fixed**: `resolveInternalLinks` (`runCrawl.ts`) was
+  fetching the *dedup-normalized* (trailing-slash-stripped) form of every
+  discovered link rather than the link's literal HTML form. On any site
+  whose own pages consistently author URLs with a trailing slash (both
+  Techtivo and LendingPoint do), this made MARKO trigger a same-site
+  redirect on nearly every crawled page purely as a side effect of its own
+  bookkeeping — invisible before Milestone 6, but actively misleading once
+  Milestone 6 started surfacing `redirected` findings (19 of 20 pages
+  flagged as "redirects" on both sites' fresh crawls, none of it real).
+  Fixed by keeping the normalized form only as the dedup *key*, while
+  fetching the original (fragment-stripped only) literal URL — confirmed
+  against real data: 0 redirected pages on both sites after the fix. Three
+  regression tests added to `runCrawl.test.ts`.
+- **Defect found and fixed**: `selectApplicableGroup` (`robotsTxt.ts`) took
+  only the *first* robots.txt group matching a given user-agent token via
+  `.find()`, silently discarding any later group sharing the same token —
+  contrary to the documented spec (matching groups for the same token must
+  be merged, not just the first one honored). Surfaced by LendingPoint's
+  real robots.txt, which genuinely has two separate `User-agent: *` blocks
+  (a hand-written one, then a Yoast-plugin-appended one) — the second
+  block's `Disallow: /search/` etc. was being silently ignored. Fixed by
+  merging all matching groups' directives before evaluating blocking; one
+  regression test added to `robotsTxt.test.ts` reproducing the real shape.
+- Both fixes are narrow, root-cause, no scope change: 210/210 tests pass,
+  lint/typecheck/build clean.
+- Verified via real crawl output, not assumption: robots.txt blocking (0
+  false positives on either site, cross-checked against each site's actual
+  `Disallow` rules and the actual crawled paths), a real `non_indexable`
+  finding on LendingPoint traced to a genuine `noindex, follow` directive
+  (not a false positive), and the bot-protection failure path (a known
+  WAF-protected fixture site) correctly returning a clean `ok: false`
+  with no fabricated crawl_pages/crawl_issues rows.
+- **Not verified this pass** (no browser automation available in this
+  session): pixel-level visual layout, the ResizeObserver-based MARKO
+  Insights/Preview height sync, and live scroll/overflow/mobile-breakpoint
+  behavior. These were reviewed at the code level only (grid structure,
+  `overflow-y-auto`/`min-h-0` classes, `lg:` breakpoint) — genuinely
+  untested in an actual browser this pass.
 
 ## Current architecture
 
@@ -663,9 +806,14 @@ implemented.
 - No password reset / magic-link flow.
 - No org switcher — a user with multiple memberships will only see their
   first organization in the UI.
-- No site editing/deletion.
-- `sites` has no per-row UPDATE/DELETE RLS policies yet (not needed until
-  those flows exist).
+- Site deletion exists as a soft-delete (archive/restore via the
+  `archive_site`/`restore_site` security-definer RPCs, wired to a real UI
+  control in `SiteMenu.tsx`) — not a limitation. What's actually missing:
+  **field-level editing** of a site's name or URL after creation; no update
+  action exists for either.
+- `sites` has no per-row UPDATE/DELETE RLS policies yet (archive/restore
+  goes through the security-definer RPCs above, not a direct grant; a
+  future name/URL edit flow would need its own RLS policy or RPC).
 - Crawl trigger is a synchronous request/response — a very slow target site
   can make "Run SEO analysis" take up to roughly 40s worst case (the seed
   page's 8s fetch, plus up to 19 more pages fetched in concurrent batches
@@ -674,8 +822,12 @@ implemented.
   action; would need a background job for a serverless production
   deployment with tighter platform request timeouts — out of scope per
   "no scheduled/background crawling."
-- No `robots.txt` fetch/parse: "indexability" is derived only from HTTP
-  status and on-page `<meta name="robots">` / `X-Robots-Tag`.
+- robots.txt is fetched once per crawl and evaluated only against the
+  `googlebot` user-agent token — not per-page, and not against any other
+  crawler's token (Bingbot, etc.). A robots.txt reachable via redirect is
+  never followed (treated as inconclusive, never blocking) — a documented,
+  deliberate simplification (Milestone 6) that trades a rare false-negative
+  for zero false-positive risk.
 - Crawl history has no pruning/retention policy yet — every run is kept
   indefinitely.
 - Opportunities are grouped by `issue_type` only; if the same issue type
@@ -692,11 +844,6 @@ implemented.
   in its own bucket — surfaced only as a count in a short note, not as
   individual line items. This keeps the UI to the three sections actually
   requested (Resolved/New/Remaining) without inventing a fourth.
-- No redirect-based finding exists: `fetchPage.ts` follows redirects
-  internally and only exposes the final response, so whether a page
-  redirected (and to where) isn't currently collected or persisted.
-  Adding that would need a `fetchPage`/schema change, which was
-  deliberately out of scope for Milestone 5.
 - `duplicate_title`/`duplicate_meta_description`/`duplicate_canonical`/
   `canonical_chain` are computed only within a single crawl run's own page
   set (at most 20 pages) — they cannot detect duplicates/chains against

@@ -25,7 +25,9 @@ export type CrawlIssueType =
   | "duplicate_canonical"
   | "canonical_chain"
   | "images_missing_alt"
-  | "invalid_structured_data";
+  | "invalid_structured_data"
+  | "redirected"
+  | "blocked_by_robots_txt";
 
 export type CrawlIssueSeverity = "warning" | "critical";
 
@@ -47,6 +49,11 @@ export type AnalyzedPage = {
   internalLinkCount: number;
   fetchError: string | null;
   issues: CrawlIssue[];
+  /** The URL actually fetched after following any redirects; equals `url`
+   * itself when there were none (or null if the page was never reached). */
+  finalUrl: string | null;
+  /** Number of redirect hops followed to reach `finalUrl` (0 if none). */
+  redirectCount: number;
 };
 
 /**
@@ -154,6 +161,11 @@ export function analyzePage(params: {
   internalLinkCount: number;
   images: ExtractedImage[];
   jsonLdBlocks: string[];
+  /** Whether this page's path is disallowed by the site's robots.txt for
+   * Google's crawler — computed by the caller (runCrawl.ts) against the
+   * crawl's single robots.txt fetch, since analyzePage has no I/O of its
+   * own. False whenever robots.txt evidence was inconclusive. */
+  blockedByRobotsTxt: boolean;
 }): AnalyzedPage {
   const {
     url,
@@ -167,6 +179,7 @@ export function analyzePage(params: {
     internalLinkCount,
     images,
     jsonLdBlocks,
+    blockedByRobotsTxt,
   } = params;
 
   const issues: CrawlIssue[] = [];
@@ -303,6 +316,30 @@ export function analyzePage(params: {
         message: `${invalidJsonLdCount} of ${jsonLdBlocks.length} structured data (JSON-LD) block${jsonLdBlocks.length === 1 ? "" : "s"} on this page could not be parsed as valid JSON.`,
       });
     }
+
+    // Purely factual: this page did not respond directly with a 2xx — it
+    // took one or more redirect hops to get there. No judgment about
+    // whether the redirect itself is a "problem" (that depends on intent
+    // MARKO can't observe), just visibility that it happened and where it
+    // ends up. A redirect that fails outright (loop, too many hops) is
+    // already reported as `http_error` above and is not double-counted
+    // here, since this only runs inside the `isSuccessStatus` branch.
+    if (fetched.redirectCount > 0) {
+      issues.push({
+        type: "redirected",
+        severity: "warning",
+        message: `This URL redirects (${fetched.redirectCount} hop${fetched.redirectCount === 1 ? "" : "s"}) to ${fetched.finalUrl}. Search engines and visitors are sent to that destination instead of this address.`,
+      });
+    }
+
+    if (blockedByRobotsTxt) {
+      issues.push({
+        type: "blocked_by_robots_txt",
+        severity: "critical",
+        message:
+          "This page is disallowed by the site's robots.txt for Google's crawler, which prevents search engines from crawling it even though it otherwise loads successfully.",
+      });
+    }
   }
 
   return {
@@ -317,5 +354,7 @@ export function analyzePage(params: {
     internalLinkCount,
     fetchError: fetched.error,
     issues,
+    finalUrl: fetched.finalUrl,
+    redirectCount: fetched.redirectCount,
   };
 }

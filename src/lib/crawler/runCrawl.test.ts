@@ -1,15 +1,31 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FetchedPage } from "./fetchPage";
+import type { RobotsTxtEvidence } from "./robotsTxt";
 
 // `fetchPage` does the actual network I/O — mocked so these tests exercise
 // only runCrawl's own discovery/dedup/cap/concurrency logic, never a real
 // request. Each test controls what URL maps to what response.
 vi.mock("./fetchPage", () => ({ fetchPage: vi.fn() }));
 
+// Only the I/O (fetchRobotsTxt) is mocked — parseRobotsTxt/selectApplicable
+// Group/isPathBlocked stay real, so tests that do provide a group still
+// exercise runCrawl's actual blocking wire-up end to end.
+vi.mock("./robotsTxt", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./robotsTxt")>();
+  return { ...actual, fetchRobotsTxt: vi.fn() };
+});
+
 const { fetchPage } = await import("./fetchPage");
+const { fetchRobotsTxt } = await import("./robotsTxt");
 const { runCrawl, MAX_ADDITIONAL_PAGES, MAX_PAGES_PER_CRAWL } = await import("./runCrawl");
 
 const mockedFetchPage = vi.mocked(fetchPage);
+const mockedFetchRobotsTxt = vi.mocked(fetchRobotsTxt);
+
+// Every test gets a permissive default (no robots.txt found) unless it
+// explicitly overrides this, so the many pre-existing tests below don't
+// need to know robots.txt exists at all.
+const NO_ROBOTS_TXT: RobotsTxtEvidence = { status: 404, fetchError: null, group: null };
 
 function htmlPage(hrefs: string[]): string {
   const links = hrefs.map((href) => `<a href="${href}">link</a>`).join("\n");
@@ -24,6 +40,8 @@ function ok(html: string, overrides: Partial<FetchedPage> = {}): FetchedPage {
     xRobotsTag: null,
     error: null,
     botProtectionBlocked: false,
+    finalUrl: null,
+    redirectCount: 0,
     ...overrides,
   };
 }
@@ -41,8 +59,13 @@ function mockSite(pages: Record<string, FetchedPage>) {
   });
 }
 
+beforeEach(() => {
+  mockedFetchRobotsTxt.mockResolvedValue(NO_ROBOTS_TXT);
+});
+
 afterEach(() => {
   mockedFetchPage.mockReset();
+  mockedFetchRobotsTxt.mockReset();
 });
 
 describe("runCrawl — page cap", () => {
@@ -197,6 +220,69 @@ describe("runCrawl — URL de-duplication", () => {
   });
 });
 
+describe("runCrawl — link normalization does not itself cause redirects", () => {
+  it("fetches a trailing-slash-authored link exactly as written, not a self-inflicted stripped variant", async () => {
+    // Regression: resolveInternalLinks used to fetch the *dedup-normalized*
+    // (trailing-slash-stripped) form of every discovered link instead of
+    // the literal href, so a site whose own pages consistently use a
+    // trailing slash would appear to "redirect" on nearly every page —
+    // not because the site redirects anything, but because MARKO stripped
+    // the slash itself before fetching.
+    mockSite({
+      "https://example.com/": ok(htmlPage(["https://example.com/about/"])),
+      "https://example.com/about/": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://example.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(mockedFetchPage).toHaveBeenCalledWith("https://example.com/about/");
+    const page = result.pages.find((p) => p.url === "https://example.com/about/");
+    expect(page).toBeDefined();
+  });
+
+  it("still fetches (and can flag as redirected) a link authored without a trailing slash", async () => {
+    // The other half of the same fix: a genuinely non-canonical link form
+    // must still be fetched literally, so a real server-side redirect is
+    // still observed and reported — only MARKO's own normalization was the
+    // bug, not trailing-slash redirects in general.
+    mockSite({
+      "https://example.com/": ok(htmlPage(["https://example.com/about"])),
+      "https://example.com/about": ok(htmlPage([]), {
+        finalUrl: "https://example.com/about/",
+        redirectCount: 1,
+      }),
+    });
+
+    const result = await runCrawl("https://example.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(mockedFetchPage).toHaveBeenCalledWith("https://example.com/about");
+    const page = result.pages.find((p) => p.url === "https://example.com/about");
+    expect(page?.redirectCount).toBe(1);
+    expect(page?.issues.some((i) => i.type === "redirected")).toBe(true);
+  });
+
+  it("still deduplicates a trailing-slash variant against its non-slash sibling, keeping the first-seen literal form", async () => {
+    mockSite({
+      "https://example.com/": ok(
+        htmlPage(["https://example.com/about", "https://example.com/about/"]),
+      ),
+      "https://example.com/about": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://example.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.pages.map((p) => p.url)).toEqual([
+      "https://example.com/",
+      "https://example.com/about",
+    ]);
+  });
+});
+
 describe("runCrawl — non-HTML asset filtering", () => {
   it("skips obvious download/asset URLs entirely", async () => {
     mockSite({
@@ -246,6 +332,8 @@ describe("runCrawl — blocked/failed pages", () => {
         xRobotsTag: null,
         error: "Timed out after 8s",
         botProtectionBlocked: false,
+        finalUrl: "https://example.com/broken",
+        redirectCount: 0,
       },
       "https://example.com/fine": ok(htmlPage([])),
     });
@@ -282,5 +370,99 @@ describe("runCrawl — blocked/failed pages", () => {
     // "page not reachable" SEO finding — MARKO only knows its own crawler
     // was denied, not that the page is actually broken.
     expect(protectedPage?.issues.some((i) => i.type === "http_error")).toBe(false);
+  });
+});
+
+describe("runCrawl — robots.txt blocking", () => {
+  it("flags a page disallowed by robots.txt while leaving other pages unaffected", async () => {
+    mockedFetchRobotsTxt.mockResolvedValue({
+      status: 200,
+      fetchError: null,
+      group: { userAgents: ["*"], directives: [{ type: "disallow", path: "/private" }] },
+    });
+    mockSite({
+      "https://example.com/": ok(
+        htmlPage(["https://example.com/private", "https://example.com/public"]),
+      ),
+      "https://example.com/private": ok(htmlPage([])),
+      "https://example.com/public": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://example.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const blocked = result.pages.find((p) => p.url === "https://example.com/private");
+    const notBlocked = result.pages.find((p) => p.url === "https://example.com/public");
+    expect(blocked?.issues.some((i) => i.type === "blocked_by_robots_txt")).toBe(true);
+    expect(notBlocked?.issues.some((i) => i.type === "blocked_by_robots_txt")).toBe(false);
+    expect(result.robotsTxtStatus).toBe(200);
+    expect(result.robotsTxtFetchError).toBeNull();
+  });
+
+  it("never blocks anything when the robots.txt fetch was inconclusive", async () => {
+    mockedFetchRobotsTxt.mockResolvedValue({
+      status: 500,
+      fetchError: "robots.txt returned status 500.",
+      group: null,
+    });
+    mockSite({
+      "https://example.com/": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://example.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.pages[0].issues.some((i) => i.type === "blocked_by_robots_txt")).toBe(false);
+    expect(result.robotsTxtStatus).toBe(500);
+    expect(result.robotsTxtFetchError).toBe("robots.txt returned status 500.");
+  });
+});
+
+describe("runCrawl — redirect transparency", () => {
+  it("carries finalUrl/redirectCount through and raises a redirected finding, without an http_error", async () => {
+    mockSite({
+      "https://example.com/": ok(htmlPage(["https://example.com/old-page"])),
+      "https://example.com/old-page": ok(htmlPage([]), {
+        finalUrl: "https://example.com/new-page",
+        redirectCount: 1,
+      }),
+    });
+
+    const result = await runCrawl("https://example.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const redirected = result.pages.find((p) => p.url === "https://example.com/old-page");
+    expect(redirected?.finalUrl).toBe("https://example.com/new-page");
+    expect(redirected?.redirectCount).toBe(1);
+    expect(redirected?.issues.some((i) => i.type === "redirected")).toBe(true);
+    expect(redirected?.issues.some((i) => i.type === "http_error")).toBe(false);
+  });
+
+  it("excludes a redirecting page from cross-page duplicate-title detection against its own destination", async () => {
+    mockSite({
+      "https://example.com/": ok(
+        htmlPage(["https://example.com/old-page", "https://example.com/new-page"]),
+      ),
+      "https://example.com/old-page": ok(
+        `<html><head><title>Same Title</title></head><body></body></html>`,
+        { finalUrl: "https://example.com/new-page", redirectCount: 1 },
+      ),
+      "https://example.com/new-page": ok(
+        `<html><head><title>Same Title</title></head><body></body></html>`,
+      ),
+    });
+
+    const result = await runCrawl("https://example.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // Only one page actually carries "Same Title" as real content (the
+    // redirect source doesn't count), so this is not a duplicate at all.
+    expect(result.pages.every((p) => !p.issues.some((i) => i.type === "duplicate_title"))).toBe(
+      true,
+    );
   });
 });

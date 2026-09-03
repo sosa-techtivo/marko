@@ -16,6 +16,8 @@ function fetched(overrides: Partial<FetchedPage> = {}): FetchedPage {
     xRobotsTag: null,
     error: null,
     botProtectionBlocked: false,
+    finalUrl: "https://example.com/",
+    redirectCount: 0,
     ...overrides,
   };
 }
@@ -33,6 +35,7 @@ function baseParams(overrides: Partial<Parameters<typeof analyzePage>[0]> = {}) 
     internalLinkCount: 3,
     images: [],
     jsonLdBlocks: [],
+    blockedByRobotsTxt: false,
     ...overrides,
   };
 }
@@ -349,5 +352,58 @@ describe("analyzePage — structured data (JSON-LD)", () => {
       }),
     );
     expect(issueTypes(page)).not.toContain("invalid_structured_data");
+  });
+});
+
+describe("analyzePage — redirect transparency", () => {
+  it("flags a page that redirected before loading successfully", () => {
+    const page = analyzePage(
+      baseParams({
+        fetched: fetched({ finalUrl: "https://example.com/new-page", redirectCount: 1 }),
+      }),
+    );
+    expect(issueTypes(page)).toContain("redirected");
+    expect(page.finalUrl).toBe("https://example.com/new-page");
+    expect(page.redirectCount).toBe(1);
+  });
+
+  it("does not flag a page that loaded directly with no redirects", () => {
+    const page = analyzePage(baseParams());
+    expect(issueTypes(page)).not.toContain("redirected");
+    expect(page.redirectCount).toBe(0);
+  });
+
+  it("does not double-report a redirect that ultimately failed (already covered by http_error)", () => {
+    const page = analyzePage(
+      baseParams({
+        fetched: fetched({
+          status: null,
+          html: null,
+          error: "Too many redirects (limit 3).",
+          finalUrl: "https://example.com/hop-3",
+          redirectCount: 3,
+        }),
+      }),
+    );
+    expect(issueTypes(page)).toEqual(["http_error"]);
+  });
+});
+
+describe("analyzePage — robots.txt blocking", () => {
+  it("flags a page the caller determined is disallowed by robots.txt", () => {
+    const page = analyzePage(baseParams({ blockedByRobotsTxt: true }));
+    expect(issueTypes(page)).toContain("blocked_by_robots_txt");
+  });
+
+  it("does not flag a page that isn't disallowed", () => {
+    const page = analyzePage(baseParams({ blockedByRobotsTxt: false }));
+    expect(issueTypes(page)).not.toContain("blocked_by_robots_txt");
+  });
+
+  it("does not flag robots.txt blocking on a page that failed to fetch", () => {
+    const page = analyzePage(
+      baseParams({ fetched: fetched({ status: 500 }), blockedByRobotsTxt: true }),
+    );
+    expect(issueTypes(page)).toEqual(["http_error"]);
   });
 });

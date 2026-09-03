@@ -13,6 +13,7 @@ import { analyzePage, type AnalyzedPage } from "./analyze";
 import { applyCrossPageChecks } from "./crossPageChecks";
 import { resolveFaviconUrl } from "./favicon";
 import { formatBotProtectionErrorMessage } from "./botProtection";
+import { fetchRobotsTxt, isPathBlocked, type RobotsGroup } from "./robotsTxt";
 
 /**
  * MVP crawl limit: the start URL plus up to this many same-site internal
@@ -102,11 +103,24 @@ function normalizeForDedup(url: URL): string {
   return normalized.toString();
 }
 
-/** Same-host, http(s), non-asset links found in `html`, deduped (after
- * normalization) against each other. */
+/**
+ * Same-host, http(s), non-asset links found in `html`, deduped against each
+ * other by `normalizeForDedup`'s equivalence rule — but each kept link is
+ * returned in the literal form the page actually links to (fragment
+ * stripped, since a fragment is never sent to the server and two links
+ * differing only by fragment are the same request either way), NOT the
+ * further trailing-slash-stripped comparison key. That distinction matters:
+ * `normalizeForDedup` is only a comparison key for "is this the same page
+ * as one already found," never the URL that gets fetched — fetching the
+ * key form instead of the real link would silently rewrite every
+ * trailing-slash-authored link (the norm on many sites) into its
+ * non-trailing-slash variant before the crawl ever starts, making the
+ * crawler trigger a same-site redirect on nearly every page purely as a
+ * side effect of its own dedup bookkeeping, not because the site itself
+ * redirects that URL.
+ */
 function resolveInternalLinks(html: string, baseUrl: URL): string[] {
-  const seen = new Set<string>();
-  const results: string[] = [];
+  const seenByDedupKey = new Map<string, string>();
 
   for (const href of extractLinkHrefs(html)) {
     let absolute: URL;
@@ -119,16 +133,26 @@ function resolveInternalLinks(html: string, baseUrl: URL): string[] {
     if (absolute.hostname !== baseUrl.hostname) continue;
     if (looksLikeNonHtmlAsset(absolute.pathname)) continue;
 
-    const normalized = normalizeForDedup(absolute);
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    results.push(normalized);
+    const dedupKey = normalizeForDedup(absolute);
+    if (seenByDedupKey.has(dedupKey)) continue;
+
+    const fetchableUrl = new URL(absolute.toString());
+    fetchableUrl.hash = "";
+    seenByDedupKey.set(dedupKey, fetchableUrl.toString());
   }
 
-  return results;
+  return [...seenByDedupKey.values()];
 }
 
-async function fetchAndAnalyze(url: string): Promise<AnalyzedPage> {
+/** Path-only blocking check against the crawl's single robots.txt fetch —
+ * `null` group (any inconclusive fetch/parse outcome) always means "not
+ * blocked," per robotsTxt.ts's contract. */
+function isBlockedByRobots(url: string, robotsGroup: RobotsGroup | null): boolean {
+  if (!robotsGroup) return false;
+  return isPathBlocked(robotsGroup, new URL(url).pathname);
+}
+
+async function fetchAndAnalyze(url: string, robotsGroup: RobotsGroup | null): Promise<AnalyzedPage> {
   const fetched = await fetchPage(url);
   const html = fetched.error === null ? (fetched.html ?? "") : null;
 
@@ -144,11 +168,22 @@ async function fetchAndAnalyze(url: string): Promise<AnalyzedPage> {
     internalLinkCount: html !== null ? resolveInternalLinks(html, new URL(url)).length : 0,
     images: html !== null ? extractImages(html) : [],
     jsonLdBlocks: html !== null ? extractJsonLdBlocks(html) : [],
+    blockedByRobotsTxt: isBlockedByRobots(url, robotsGroup),
   });
 }
 
 export type CrawlResult =
-  | { ok: true; pages: AnalyzedPage[]; faviconUrl: string | null }
+  | {
+      ok: true;
+      pages: AnalyzedPage[];
+      faviconUrl: string | null;
+      /** Evidence from the crawl's single robots.txt fetch, persisted for
+       * transparency (e.g. "couldn't reach robots.txt" vs. "none found").
+       * Never used for anything beyond that — blocking itself was already
+       * applied per-page above via `blockedByRobotsTxt`. */
+      robotsTxtStatus: number | null;
+      robotsTxtFetchError: string | null;
+    }
   | { ok: false; error: string };
 
 /**
@@ -167,7 +202,13 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
     return { ok: false, error: "Only http/https URLs can be crawled." };
   }
 
-  const startFetched = await fetchPage(parsedStart.toString());
+  // Fetched alongside the seed page (not sequentially after it) — the two
+  // are independent I/O, and robots.txt is small/fast, so this adds no
+  // meaningful time to the crawl's existing budget.
+  const [startFetched, robotsEvidence] = await Promise.all([
+    fetchPage(parsedStart.toString()),
+    fetchRobotsTxt(parsedStart.toString()),
+  ]);
   if (startFetched.error !== null) {
     return {
       ok: false,
@@ -200,6 +241,7 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
     internalLinkCount: internalLinks.length,
     images: extractImages(startHtml),
     jsonLdBlocks: extractJsonLdBlocks(startHtml),
+    blockedByRobotsTxt: isBlockedByRobots(parsedStart.toString(), robotsEvidence.group),
   });
 
   const pages: AnalyzedPage[] = [startPage];
@@ -209,10 +251,13 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
   // registered as ".../blog" but a discovered link reads ".../blog/") is
   // still recognized as "the same page" and excluded — `startPage.url`
   // itself is left as the exact URL the site was registered with,
-  // unchanged either way.
+  // unchanged either way. `internalLinks` entries are literal (unnormalized
+  // beyond fragment-stripping — see resolveInternalLinks), so each one is
+  // normalized here, at comparison time, rather than comparing it directly
+  // against the already-normalized `startNormalized`.
   const startNormalized = normalizeForDedup(parsedStart);
   const linksToFollow = internalLinks
-    .filter((link) => link !== startNormalized)
+    .filter((link) => normalizeForDedup(new URL(link)) !== startNormalized)
     .slice(0, MAX_ADDITIONAL_PAGES);
 
   // Fetched in small concurrent batches (see FETCH_CONCURRENCY) rather
@@ -221,11 +266,19 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
   // fully sequential crawl would have produced.
   for (let i = 0; i < linksToFollow.length; i += FETCH_CONCURRENCY) {
     const batch = linksToFollow.slice(i, i + FETCH_CONCURRENCY);
-    const analyzed = await Promise.all(batch.map((link) => fetchAndAnalyze(link)));
+    const analyzed = await Promise.all(
+      batch.map((link) => fetchAndAnalyze(link, robotsEvidence.group)),
+    );
     pages.push(...analyzed);
   }
 
   const faviconUrl = resolveFaviconUrl(startHtml, parsedStart);
 
-  return { ok: true, pages: applyCrossPageChecks(pages), faviconUrl };
+  return {
+    ok: true,
+    pages: applyCrossPageChecks(pages),
+    faviconUrl,
+    robotsTxtStatus: robotsEvidence.status,
+    robotsTxtFetchError: robotsEvidence.fetchError,
+  };
 }

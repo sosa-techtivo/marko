@@ -39,7 +39,17 @@ export function applyCrossPageChecks(pages: AnalyzedPage[]): AnalyzedPage[] {
     extraIssuesByUrl.set(url, list);
   }
 
-  const titleGroups = groupBy(pages, (p) => (p.title ? normalizeForComparison(p.title) : null));
+  // A page that redirected elsewhere has no independent content of its own
+  // — it's the same response as its destination. Comparing it here would
+  // produce false "duplicate"/"chain" findings against the very URL it
+  // redirects to (or, transitively, against any other page that happens to
+  // share that destination). Excluded from every check below; the
+  // redirect itself is still reported as its own `redirected` finding from
+  // analyze.ts, and the page is still returned in the final output —
+  // it just never contributes to or receives a cross-page finding here.
+  const contentPages = pages.filter((p) => p.redirectCount === 0);
+
+  const titleGroups = groupBy(contentPages, (p) => (p.title ? normalizeForComparison(p.title) : null));
   for (const group of titleGroups.values()) {
     if (group.length < 2) continue;
     for (const page of group) {
@@ -51,7 +61,7 @@ export function applyCrossPageChecks(pages: AnalyzedPage[]): AnalyzedPage[] {
     }
   }
 
-  const metaGroups = groupBy(pages, (p) =>
+  const metaGroups = groupBy(contentPages, (p) =>
     p.metaDescription ? normalizeForComparison(p.metaDescription) : null,
   );
   for (const group of metaGroups.values()) {
@@ -69,7 +79,7 @@ export function applyCrossPageChecks(pages: AnalyzedPage[]): AnalyzedPage[] {
   // with an `invalid_canonical` finding are excluded here — that problem is
   // reported separately, and re-flagging them as a "duplicate" target would
   // just compound noise on an already-broken canonical).
-  const validCanonicalPages = pages.filter(
+  const validCanonicalPages = contentPages.filter(
     (p) => p.canonicalUrl !== null && !p.issues.some((issue) => issue.type === "invalid_canonical"),
   );
   const canonicalGroups = groupBy(validCanonicalPages, (p) => p.canonicalUrl);

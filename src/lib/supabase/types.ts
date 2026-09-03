@@ -106,6 +106,8 @@ export type Database = {
           completed_at: string | null;
           pages_crawled: number;
           error_message: string | null;
+          robots_txt_status: number | null;
+          robots_txt_fetch_error: string | null;
         };
         Insert: {
           id?: string;
@@ -117,6 +119,8 @@ export type Database = {
           completed_at?: string | null;
           pages_crawled?: number;
           error_message?: string | null;
+          robots_txt_status?: number | null;
+          robots_txt_fetch_error?: string | null;
         };
         Update: {
           id?: string;
@@ -128,6 +132,8 @@ export type Database = {
           completed_at?: string | null;
           pages_crawled?: number;
           error_message?: string | null;
+          robots_txt_status?: number | null;
+          robots_txt_fetch_error?: string | null;
         };
         Relationships: [
           {
@@ -162,6 +168,8 @@ export type Database = {
           internal_link_count: number;
           fetch_error: string | null;
           created_at: string;
+          final_url: string | null;
+          redirect_count: number;
         };
         Insert: {
           id?: string;
@@ -178,6 +186,8 @@ export type Database = {
           internal_link_count?: number;
           fetch_error?: string | null;
           created_at?: string;
+          final_url?: string | null;
+          redirect_count?: number;
         };
         Update: {
           id?: string;
@@ -194,6 +204,8 @@ export type Database = {
           internal_link_count?: number;
           fetch_error?: string | null;
           created_at?: string;
+          final_url?: string | null;
+          redirect_count?: number;
         };
         Relationships: [
           {

@@ -118,6 +118,8 @@ export async function runSeoAnalysis(formData: FormData) {
         robots_directives: page.robotsDirectives,
         internal_link_count: page.internalLinkCount,
         fetch_error: page.fetchError,
+        final_url: page.finalUrl,
+        redirect_count: page.redirectCount,
       })),
     )
     .select("id, url");
@@ -176,6 +178,8 @@ export async function runSeoAnalysis(formData: FormData) {
       status: "completed",
       completed_at: new Date().toISOString(),
       pages_crawled: result.pages.length,
+      robots_txt_status: result.robotsTxtStatus,
+      robots_txt_fetch_error: result.robotsTxtFetchError,
     })
     .eq("id", crawlRun.id);
 
