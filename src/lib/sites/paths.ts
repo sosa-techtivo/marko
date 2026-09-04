@@ -8,3 +8,11 @@
 export function siteDetailPath(slug: string): string {
   return `/dashboard/sites/${slug}`;
 }
+
+/** Canonical path to a Site's downloadable current-SEO-report PDF (see
+ * src/app/dashboard/sites/[slug]/report/route.ts) — same slug-based
+ * convention as siteDetailPath, built from it rather than duplicating the
+ * base path. */
+export function siteReportPdfPath(slug: string): string {
+  return `${siteDetailPath(slug)}/report`;
+}

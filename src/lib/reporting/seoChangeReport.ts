@@ -1,5 +1,6 @@
 import type { CrawlIssueType } from "@/lib/crawler/analyze";
 import { ISSUE_TAXONOMY, type IssueCategory, type IssuePriority } from "./issueTaxonomy";
+import { isSeedEntryRedirectArtifact } from "./seoHealthReport";
 
 /**
  * Compares the latest completed crawl to the immediately previous completed
@@ -36,6 +37,13 @@ export type ComparisonPageRow = {
   url: string;
   http_status: number | null;
   fetch_error: string | null;
+  /** Same seed-entry-redirect-artifact fields as CrawlPageRow (see
+   * seoHealthReport.ts) — optional and purely additive: omitting them (or
+   * omitting `registeredUrl` below) reproduces this module's exact
+   * previous behavior. */
+  final_url?: string | null;
+  redirect_count?: number;
+  canonical_url?: string | null;
 };
 
 export type ComparisonIssueRow = {
@@ -74,6 +82,13 @@ export type SeoChangeReport =
          * or the first successful analysis after a previous failure).
          * Their findings appear in `newlyAnalyzed`, never in `newIssues`. */
         newlyAnalyzedPageCount: number;
+        /** How many current+previous issue rows were excluded from every
+         * count/list above as a seed-entry-redirect artifact (see
+         * isSeedEntryRedirectArtifact in seoHealthReport.ts) — the same
+         * exclusion buildSeoHealthReport applies to the SEO Health Summary,
+         * kept consistent here so the two reports' totals never diverge.
+         * Zero whenever `registeredUrl` isn't passed. */
+        excludedSeedArtifactCount: number;
       };
       resolved: ChangedIssue[];
       newIssues: ChangedIssue[];
@@ -117,8 +132,13 @@ export function buildSeoChangeReport(params: {
   previousRun: RunRef | null;
   pages: ComparisonPageRow[];
   issues: ComparisonIssueRow[];
+  /** The site's registered URL (`sites.url`) — optional and purely
+   * additive: passing it enables the same seed-entry-redirect exclusion
+   * buildSeoHealthReport applies (see isSeedEntryRedirectArtifact);
+   * omitting it reproduces this function's exact previous behavior. */
+  registeredUrl?: string;
 }): SeoChangeReport {
-  const { latestRun, previousRun, pages, issues } = params;
+  const { latestRun, previousRun, pages, issues, registeredUrl } = params;
 
   if (!previousRun) {
     return { status: "no-previous-run", latestRun };
@@ -160,11 +180,16 @@ export function buildSeoChangeReport(params: {
   type Entry = { url: string; issueType: CrawlIssueType };
   const currentEntries: Entry[] = [];
   const previousEntries: Entry[] = [];
+  let excludedSeedArtifactCount = 0;
 
   for (const issue of issues) {
     if (!isKnownIssueType(issue.issue_type)) continue;
     const page = pageById.get(issue.crawl_page_id);
     if (!page) continue;
+    if (isSeedEntryRedirectArtifact(issue, page, registeredUrl)) {
+      excludedSeedArtifactCount++;
+      continue;
+    }
     const entry: Entry = { url: page.url, issueType: issue.issue_type };
     if (page.crawl_run_id === latestRun.id) currentEntries.push(entry);
     else if (page.crawl_run_id === previousRun.id) previousEntries.push(entry);
@@ -235,6 +260,7 @@ export function buildSeoChangeReport(params: {
       currentPagesWithIssues: new Set(currentEntries.map((e) => e.url)).size,
       excludedPreviousIssueCount,
       newlyAnalyzedPageCount: newlyAnalyzedUrls.size,
+      excludedSeedArtifactCount,
     },
     resolved,
     newIssues,

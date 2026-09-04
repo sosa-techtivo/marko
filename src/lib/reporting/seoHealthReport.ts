@@ -53,6 +53,13 @@ export type SeoHealthReport = {
     pagesWithIssues: number;
     highPriorityIssues: number;
     totalIssues: number;
+    /** How many raw crawl_issues rows were excluded from every count/list
+     * above as a seed-entry-redirect artifact (see
+     * isSeedEntryRedirectArtifact) — never itself added back into a
+     * client-facing total, but surfaced so a Technical Appendix–style
+     * consumer can note that raw evidence exists without inflating the
+     * headline numbers. Zero whenever `registeredUrl` isn't passed. */
+    excludedSeedArtifactCount: number;
   };
   opportunities: SeoOpportunity[];
   /** Only meaningful/non-empty when there are zero issues; see buildSeoHealthReport. */
@@ -92,10 +99,19 @@ function extractHostname(url: string): string | null {
  *    empty, unparsable, or points at some other unrelated domain is never
  *    excluded — it remains a genuine finding regardless of the entry
  *    redirect.
+ *
+ * Exported (not local to this module) so `buildSeoChangeReport` can apply
+ * the exact same exclusion to its own Resolved/New/Remaining comparison —
+ * two independent re-implementations of this rule previously drifted,
+ * producing a client-visible total mismatch between the SEO Health Summary
+ * and the historical comparison (35 vs. 37) for the same analysis. Takes
+ * minimal structural types rather than CrawlIssueRow/CrawlPageRow directly
+ * so callers with their own, differently-shaped row types (e.g.
+ * ComparisonIssueRow/ComparisonPageRow) can pass their rows as-is.
  */
-function isSeedEntryRedirectArtifact(
-  issue: CrawlIssueRow,
-  page: CrawlPageRow | undefined,
+export function isSeedEntryRedirectArtifact(
+  issue: { issue_type: string },
+  page: { url: string; redirect_count?: number; final_url?: string | null; canonical_url?: string | null } | undefined,
   registeredUrl: string | undefined,
 ): boolean {
   if (!page || !registeredUrl) return false;
@@ -213,6 +229,7 @@ export function buildSeoHealthReport(
       pagesWithIssues,
       highPriorityIssues,
       totalIssues: countedIssues.length,
+      excludedSeedArtifactCount: issues.length - countedIssues.length,
     },
     opportunities,
     positiveSignals: countedIssues.length === 0 ? buildPositiveSignals(pages) : [],

@@ -33,6 +33,8 @@ import { ProgressCardSkeleton } from "@/components/seoReport/ProgressCardSkeleto
 import { MarkoInsightsCardSkeleton } from "@/components/seoReport/MarkoInsightsCardSkeleton";
 import { AnalysisHistorySkeleton } from "@/components/seoReport/AnalysisHistorySkeleton";
 import { describeRegisteredUrlRedirect, resolveEffectiveSiteUrl } from "@/lib/sites/effectiveUrl";
+import { siteReportPdfPath } from "@/lib/sites/paths";
+import { DownloadReportButton } from "@/components/seoReport/DownloadReportButton";
 import { getGoogleConnectionStatus } from "@/lib/googleSearchConsole/connectionStatus";
 import { getSiteSearchConsoleSnapshot } from "@/lib/googleSearchConsole/siteSnapshot";
 
@@ -240,7 +242,7 @@ export default async function SiteDetailPage({
   const { data: comparisonPages } = latestCompletedRun && previousCompletedRun
     ? await supabase
         .from("crawl_pages")
-        .select("id, crawl_run_id, url, http_status, fetch_error")
+        .select("id, crawl_run_id, url, http_status, fetch_error, final_url, redirect_count, canonical_url")
         .in("crawl_run_id", [latestCompletedRun.id, previousCompletedRun.id])
     : { data: null };
 
@@ -259,6 +261,7 @@ export default async function SiteDetailPage({
           : null,
         pages: comparisonPages ?? [],
         issues: comparisonIssues ?? [],
+        registeredUrl: site.url,
       })
     : null;
 
@@ -322,7 +325,29 @@ export default async function SiteDetailPage({
               </span>
             )}
           </div>
-          <RunAnalysisButton siteId={site.id} />
+          <div className="flex shrink-0 items-center gap-2">
+            {/* A client component that fetches the PDF route and triggers
+                the download from the response Blob, so the button can show
+                "Generating PDF…" while the server renders it instead of
+                the page appearing frozen. Only rendered once a completed
+                analysis exists; otherwise a disabled control, so this
+                never pretends a report is available when none is. PDF
+                generation itself stays entirely server-side — see
+                DownloadReportButton and report/route.ts. */}
+            {latestCompletedRun ? (
+              <DownloadReportButton href={siteReportPdfPath(site.slug)} />
+            ) : (
+              <button
+                type="button"
+                disabled
+                title="Run an SEO analysis first to generate a report"
+                className="cursor-not-allowed rounded-md border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-400"
+              >
+                Download PDF
+              </button>
+            )}
+            <RunAnalysisButton siteId={site.id} />
+          </div>
         </div>
 
         {error && (

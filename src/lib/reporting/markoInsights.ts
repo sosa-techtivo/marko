@@ -86,7 +86,7 @@ function priorityInsight(opportunity: SeoOpportunity, pagesAnalyzed: number): Ma
     title: `${opportunity.label} is the top priority`,
     explanation:
       `${PRIORITY_LABELS[opportunity.priority]} priority — affects ${pageCountPhrase(count, pagesAnalyzed)}, ` +
-      `the most significant finding in this audit.`,
+      `the highest-priority finding in this audit.`,
     priority: opportunity.priority,
     category: opportunity.category,
     affectedPageCount: count,

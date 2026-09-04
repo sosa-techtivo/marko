@@ -182,3 +182,93 @@ describe("buildSeoChangeReport — expanded coverage (5 → 20 pages) semantics"
     expect(report.newlyAnalyzed[0]).toMatchObject({ url: "https://example.com/p10", issueType: "missing_h1" });
   });
 });
+
+describe("buildSeoChangeReport — seed-entry-redirect artifact exclusion", () => {
+  const REGISTERED_URL = "http://techtivo.com/";
+  const EFFECTIVE_URL = "https://www.techtivo.com/";
+
+  it("excludes the registered seed's redirected/invalid_canonical findings from Remaining, matching buildSeoHealthReport (the 35 vs. 37 fix)", () => {
+    // The seed page redirects in both runs — same artifact present in the
+    // previous and the latest analysis, so without the fix it would show
+    // up as "Remaining" and inflate the client-facing total beyond what
+    // the SEO Health Summary (buildSeoHealthReport) already reports.
+    const seedOverrides = { final_url: EFFECTIVE_URL, redirect_count: 1, canonical_url: EFFECTIVE_URL };
+    const pages: ComparisonPageRow[] = [
+      page("seed-prev", PREVIOUS_RUN.id, REGISTERED_URL, seedOverrides),
+      page("about-prev", PREVIOUS_RUN.id, "https://www.techtivo.com/about/"),
+      page("seed-cur", LATEST_RUN.id, REGISTERED_URL, seedOverrides),
+      page("about-cur", LATEST_RUN.id, "https://www.techtivo.com/about/"),
+    ];
+    const issues: ComparisonIssueRow[] = [
+      issue(PREVIOUS_RUN.id, "seed-prev", "redirected"),
+      issue(PREVIOUS_RUN.id, "seed-prev", "invalid_canonical"),
+      issue(PREVIOUS_RUN.id, "about-prev", "multiple_h1"),
+      issue(LATEST_RUN.id, "seed-cur", "redirected"),
+      issue(LATEST_RUN.id, "seed-cur", "invalid_canonical"),
+      issue(LATEST_RUN.id, "about-cur", "multiple_h1"),
+    ];
+
+    const report = buildSeoChangeReport({
+      latestRun: LATEST_RUN,
+      previousRun: PREVIOUS_RUN,
+      pages,
+      issues,
+      registeredUrl: REGISTERED_URL,
+    });
+    if (report.status !== "compared") throw new Error("expected a compared report");
+
+    expect(report.remaining).toEqual([
+      { issueType: "multiple_h1", category: "structure", priority: "medium", label: "Multiple H1 headings", url: "https://www.techtivo.com/about/" },
+    ]);
+    expect(report.summary.remainingCount).toBe(1);
+    expect(report.summary.newCount).toBe(0);
+    expect(report.summary.resolvedCount).toBe(0);
+    expect(report.summary.excludedSeedArtifactCount).toBe(4);
+  });
+
+  it("does not exclude a redirect finding on a non-seed page", () => {
+    const pages: ComparisonPageRow[] = [
+      page("old-prev", PREVIOUS_RUN.id, "https://example.com/old-page/", {
+        final_url: "https://example.com/new-page/",
+        redirect_count: 1,
+      }),
+      page("old-cur", LATEST_RUN.id, "https://example.com/old-page/", {
+        final_url: "https://example.com/new-page/",
+        redirect_count: 1,
+      }),
+    ];
+    const issues: ComparisonIssueRow[] = [
+      issue(PREVIOUS_RUN.id, "old-prev", "redirected"),
+      issue(LATEST_RUN.id, "old-cur", "redirected"),
+    ];
+
+    const report = buildSeoChangeReport({
+      latestRun: LATEST_RUN,
+      previousRun: PREVIOUS_RUN,
+      pages,
+      issues,
+      registeredUrl: "https://example.com/", // the seed is a different URL entirely
+    });
+    if (report.status !== "compared") throw new Error("expected a compared report");
+
+    expect(report.remaining).toHaveLength(1);
+    expect(report.summary.excludedSeedArtifactCount).toBe(0);
+  });
+
+  it("reproduces the exact previous behavior when registeredUrl is omitted", () => {
+    const seedOverrides = { final_url: EFFECTIVE_URL, redirect_count: 1, canonical_url: EFFECTIVE_URL };
+    const pages: ComparisonPageRow[] = [
+      page("seed-prev", PREVIOUS_RUN.id, REGISTERED_URL, seedOverrides),
+      page("seed-cur", LATEST_RUN.id, REGISTERED_URL, seedOverrides),
+    ];
+    const issues: ComparisonIssueRow[] = [
+      issue(PREVIOUS_RUN.id, "seed-prev", "redirected"),
+      issue(LATEST_RUN.id, "seed-cur", "redirected"),
+    ];
+
+    const report = compare(pages, issues);
+
+    expect(report.remaining).toHaveLength(1);
+    expect(report.summary.excludedSeedArtifactCount).toBe(0);
+  });
+});

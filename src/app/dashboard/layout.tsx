@@ -41,6 +41,23 @@ export default async function DashboardLayout({
         </div>
       </header>
       <main className="flex flex-1 flex-col px-6 py-8">{children}</main>
+      {/* Global product signature — a normal-flow block after `main`
+          (itself `flex-1` in this `min-h-screen flex-col` shell), so on a
+          short page it's pushed to the bottom of the viewport without
+          being fixed/sticky, and on a long/scrollable page it simply
+          follows the content rather than overlapping it. */}
+      <footer className="shrink-0 border-t border-zinc-200 px-6 py-3 text-center text-[11px] text-zinc-400">
+        MARKO by{" "}
+        <a
+          href="https://www.techtivo.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-zinc-400 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-600"
+        >
+          Techtivo
+        </a>{" "}
+        — Smarter marketing. Clearer decisions.
+      </footer>
     </div>
   );
 }

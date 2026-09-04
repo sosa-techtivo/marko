@@ -220,7 +220,16 @@ describe("Sites list vs. site detail consistency (the exact Techtivo A/B scenari
 
     expect(reportA.summary.totalIssues).toBe(2);
     expect(reportB.summary.totalIssues).toBe(2);
-    expect(reportA.summary).toEqual(reportB.summary);
+    // Every client-facing total must agree between the two — excluding
+    // `excludedSeedArtifactCount`, which is expected to differ: Site A's
+    // registered URL never redirects (nothing to exclude), while Site B's
+    // seed page redirects and has its two entry-only findings excluded.
+    // That asymmetry is the whole point of the exclusion, not a bug.
+    const { excludedSeedArtifactCount: excludedA, ...comparableA } = reportA.summary;
+    const { excludedSeedArtifactCount: excludedB, ...comparableB } = reportB.summary;
+    expect(comparableA).toEqual(comparableB);
+    expect(excludedA).toBe(0);
+    expect(excludedB).toBe(2);
     expect(reportA.opportunities.map((o) => o.issueType).sort()).toEqual(
       reportB.opportunities.map((o) => o.issueType).sort(),
     );
