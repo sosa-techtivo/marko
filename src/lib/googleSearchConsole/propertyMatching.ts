@@ -65,8 +65,22 @@ function stripLeadingWww(hostname: string): string {
 }
 
 /**
- * Returns the single exact-match property for `siteUrl`, or `null` if
- * there isn't exactly one (no matches, or more than one candidate).
+ * Returns the single best exact-match property for `siteUrl`, or `null`
+ * when there isn't a safe, unambiguous choice.
+ *
+ * Url-prefix and domain candidates are tracked separately (each still
+ * deduped by its own normalized key, so an identical duplicate entry in
+ * the account's property list is never mistaken for ambiguity — see
+ * "dedupes an identical duplicate property entry" in the test file). An
+ * exact url-prefix match is always preferred over a domain match: a
+ * domain property for "example.com" structurally covers
+ * "www.example.com" too, so it will often also satisfy the domain check
+ * for the same site — that overlap is expected, not genuine ambiguity,
+ * since the url-prefix match is strictly the more specific of the two
+ * signals for this exact URL. The domain property is only used as a
+ * fallback when no exact url-prefix property exists. Real ambiguity
+ * (more than one equally-specific candidate within the same tier) still
+ * returns `null` rather than guessing.
  */
 export function findExactPropertyMatch(
   siteUrl: string,
@@ -78,22 +92,27 @@ export function findExactPropertyMatch(
 
   const siteRootDomain = stripLeadingWww(siteHostname);
 
-  const matches = new Map<string, MatchedProperty>();
+  const urlPrefixMatches = new Map<string, MatchedProperty>();
+  const domainMatches = new Map<string, MatchedProperty>();
+
   for (const property of properties) {
     const type = classifyPropertyType(property.siteUrl);
 
     if (type === "url_prefix") {
       const normalizedPropertyPrefix = normalizeUrlPrefix(property.siteUrl);
       if (normalizedPropertyPrefix === normalizedSitePrefix) {
-        matches.set(`url_prefix:${normalizedPropertyPrefix}`, { siteUrl: property.siteUrl, type });
+        urlPrefixMatches.set(normalizedPropertyPrefix, { siteUrl: property.siteUrl, type });
       }
     } else {
       const domain = property.siteUrl.slice("sc-domain:".length).toLowerCase();
       if (domain === siteRootDomain) {
-        matches.set(`domain:${domain}`, { siteUrl: property.siteUrl, type });
+        domainMatches.set(domain, { siteUrl: property.siteUrl, type });
       }
     }
   }
 
-  return matches.size === 1 ? [...matches.values()][0] : null;
+  if (urlPrefixMatches.size === 1) return [...urlPrefixMatches.values()][0];
+  if (urlPrefixMatches.size > 1) return null;
+
+  return domainMatches.size === 1 ? [...domainMatches.values()][0] : null;
 }

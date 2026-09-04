@@ -466,3 +466,135 @@ describe("runCrawl — redirect transparency", () => {
     );
   });
 });
+
+describe("runCrawl — redirected seed link resolution", () => {
+  it("resolves a relative link on a redirected seed page against the final URL, not the registered one", async () => {
+    // Exact regression scenario: registered https://techtivo.com redirects
+    // to https://www.techtivo.com/; a relative link on that (real, final)
+    // page must resolve against www.techtivo.com, not bounce back to the
+    // bare apex domain the site was originally requested at.
+    mockSite({
+      "https://techtivo.com/": ok(htmlPage(["/about-us/"]), {
+        finalUrl: "https://www.techtivo.com/",
+        redirectCount: 1,
+      }),
+      "https://www.techtivo.com/about-us/": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://techtivo.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(mockedFetchPage).toHaveBeenCalledWith("https://www.techtivo.com/about-us/");
+    expect(mockedFetchPage).not.toHaveBeenCalledWith("https://techtivo.com/about-us/");
+    expect(result.pages.map((p) => p.url)).toEqual([
+      "https://techtivo.com/",
+      "https://www.techtivo.com/about-us/",
+    ]);
+  });
+
+  it("treats an absolute link to the redirected seed's true host as same-site (not external)", async () => {
+    // Under the pre-fix same-site check (compared against the originally
+    // requested host), an absolute link to the page's own true host would
+    // have been wrongly excluded as "external" once the seed redirected to
+    // a different host.
+    mockSite({
+      "https://techtivo.com/": ok(htmlPage(["https://www.techtivo.com/contact/"]), {
+        finalUrl: "https://www.techtivo.com/",
+        redirectCount: 1,
+      }),
+      "https://www.techtivo.com/contact/": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://techtivo.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.pages.map((p) => p.url)).toContain("https://www.techtivo.com/contact/");
+  });
+
+  it("excludes a self-link on a redirected seed page (e.g. a home link) instead of re-crawling it as a new page", async () => {
+    mockSite({
+      "https://techtivo.com/": ok(htmlPage(["/", "/about-us/"]), {
+        finalUrl: "https://www.techtivo.com/",
+        redirectCount: 1,
+      }),
+      "https://www.techtivo.com/about-us/": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://techtivo.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // Only the seed itself and the one genuinely new page — the self-link
+    // (resolving to the seed's own final URL) is not queued as an
+    // additional page, so the homepage is never fetched/analyzed twice.
+    expect(result.pages.map((p) => p.url)).toEqual([
+      "https://techtivo.com/",
+      "https://www.techtivo.com/about-us/",
+    ]);
+  });
+
+  it("counts internalLinkCount using the same effective (final) base URL, on both the seed and an additional page", async () => {
+    mockSite({
+      "https://techtivo.com/": ok(
+        htmlPage(["/about-us/", "https://www.techtivo.com/contact/"]),
+        { finalUrl: "https://www.techtivo.com/", redirectCount: 1 },
+      ),
+      "https://www.techtivo.com/about-us/": ok(htmlPage([]), {
+        finalUrl: "https://www.techtivo.com/about-us/",
+        redirectCount: 0,
+      }),
+      "https://www.techtivo.com/contact/": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://techtivo.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const seed = result.pages.find((p) => p.url === "https://techtivo.com/");
+    // Both discovered links resolve/count against the true (www) host —
+    // neither is silently dropped as "external" or miscounted.
+    expect(seed?.internalLinkCount).toBe(2);
+  });
+
+  it("leaves non-redirected seed behavior unchanged (relative links resolve against the requested URL as before)", async () => {
+    mockSite({
+      "https://example.com/": ok(htmlPage(["/about", "/contact"])),
+      "https://example.com/about": ok(htmlPage([])),
+      "https://example.com/contact": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://example.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.pages.map((p) => p.url)).toEqual([
+      "https://example.com/",
+      "https://example.com/about",
+      "https://example.com/contact",
+    ]);
+    const seed = result.pages.find((p) => p.url === "https://example.com/");
+    expect(seed?.internalLinkCount).toBe(2);
+  });
+
+  it("still reports finalUrl/redirectCount/the redirected finding correctly for the redirected seed itself", async () => {
+    mockSite({
+      "https://techtivo.com/": ok(htmlPage(["/about-us/"]), {
+        finalUrl: "https://www.techtivo.com/",
+        redirectCount: 1,
+      }),
+      "https://www.techtivo.com/about-us/": ok(htmlPage([])),
+    });
+
+    const result = await runCrawl("https://techtivo.com/");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const seed = result.pages.find((p) => p.url === "https://techtivo.com/");
+    expect(seed?.finalUrl).toBe("https://www.techtivo.com/");
+    expect(seed?.redirectCount).toBe(1);
+    expect(seed?.issues.some((i) => i.type === "redirected")).toBe(true);
+    expect(seed?.issues.some((i) => i.type === "http_error")).toBe(false);
+  });
+});

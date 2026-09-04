@@ -1,4 +1,4 @@
-import { fetchPage } from "./fetchPage";
+import { fetchPage, type FetchedPage } from "./fetchPage";
 import {
   extractCanonical,
   extractFirstH1,
@@ -144,6 +144,24 @@ function resolveInternalLinks(html: string, baseUrl: URL): string[] {
   return [...seenByDedupKey.values()];
 }
 
+/**
+ * The base URL a fetched page's relative links/hrefs should resolve
+ * against: the page's actual final URL after following any redirects
+ * (`fetched.finalUrl`), never the URL originally requested. A relative
+ * href like `/about-us/` is relative to wherever the HTML actually came
+ * from — if the requested URL redirected to a different host (e.g. a
+ * bare apex domain redirecting to its `www` subdomain), resolving against
+ * the pre-redirect URL reattaches every discovered link to a host that
+ * never served that content, which can 404 for every path except the one
+ * that happened to redirect. Falls back to the requested URL only when no
+ * final URL is available (both call sites only reach this after a
+ * successful fetch, where `finalUrl` is always set, but the fallback
+ * keeps this helper correct on its own terms rather than assuming that).
+ */
+function resolveLinkBaseUrl(fetched: FetchedPage, requestedUrl: string): URL {
+  return new URL(fetched.finalUrl ?? requestedUrl);
+}
+
 /** Path-only blocking check against the crawl's single robots.txt fetch —
  * `null` group (any inconclusive fetch/parse outcome) always means "not
  * blocked," per robotsTxt.ts's contract. */
@@ -165,7 +183,7 @@ async function fetchAndAnalyze(url: string, robotsGroup: RobotsGroup | null): Pr
     rawCanonicalHref: html !== null ? extractCanonical(html) : null,
     h1: html !== null ? extractFirstH1(html) : null,
     h1Count: html !== null ? extractH1Count(html) : 0,
-    internalLinkCount: html !== null ? resolveInternalLinks(html, new URL(url)).length : 0,
+    internalLinkCount: html !== null ? resolveInternalLinks(html, resolveLinkBaseUrl(fetched, url)).length : 0,
     images: html !== null ? extractImages(html) : [],
     jsonLdBlocks: html !== null ? extractJsonLdBlocks(html) : [],
     blockedByRobotsTxt: isBlockedByRobots(url, robotsGroup),
@@ -227,7 +245,8 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
   }
 
   const startHtml = startFetched.html ?? "";
-  const internalLinks = resolveInternalLinks(startHtml, parsedStart);
+  const startLinkBaseUrl = resolveLinkBaseUrl(startFetched, parsedStart.toString());
+  const internalLinks = resolveInternalLinks(startHtml, startLinkBaseUrl);
 
   const startPage = analyzePage({
     url: parsedStart.toString(),
@@ -246,16 +265,19 @@ export async function runCrawl(startUrl: string): Promise<CrawlResult> {
 
   const pages: AnalyzedPage[] = [startPage];
 
-  // Compared against the *normalized* seed URL (not the raw one) so a
-  // trailing-slash-variant link back to the start page (e.g. the seed is
-  // registered as ".../blog" but a discovered link reads ".../blog/") is
-  // still recognized as "the same page" and excluded — `startPage.url`
-  // itself is left as the exact URL the site was registered with,
-  // unchanged either way. `internalLinks` entries are literal (unnormalized
-  // beyond fragment-stripping — see resolveInternalLinks), so each one is
+  // Compared against the *normalized effective* seed URL — `startLinkBaseUrl`
+  // (the seed's actual final URL after any redirect), not the originally
+  // registered one — so a self-link discovered on the seed page (e.g. a
+  // logo/home link resolving to wherever the page actually lives) is still
+  // recognized as "the same page" and excluded, the same way a trailing-
+  // slash variant already was (e.g. the seed is registered as ".../blog"
+  // but a discovered link reads ".../blog/"). `startPage.url` itself is
+  // left as the exact URL the site was registered with, unchanged either
+  // way. `internalLinks` entries are literal (unnormalized beyond
+  // fragment-stripping — see resolveInternalLinks), so each one is
   // normalized here, at comparison time, rather than comparing it directly
   // against the already-normalized `startNormalized`.
-  const startNormalized = normalizeForDedup(parsedStart);
+  const startNormalized = normalizeForDedup(startLinkBaseUrl);
   const linksToFollow = internalLinks
     .filter((link) => normalizeForDedup(new URL(link)) !== startNormalized)
     .slice(0, MAX_ADDITIONAL_PAGES);

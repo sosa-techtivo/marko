@@ -52,9 +52,34 @@ describe("findExactPropertyMatch", () => {
     expect(findExactPropertyMatch("https://example.com", [])).toBeNull();
   });
 
-  it("returns null (does not auto-select) when both a domain and a url-prefix property match", () => {
+  it("prefers the exact url-prefix property over a domain property that also covers the same site", () => {
+    // A domain property structurally covers this site too (its host, root-
+    // domain-stripped, matches), but the url-prefix property is the more
+    // specific, exact signal — this is not genuine ambiguity.
     const properties = [property("sc-domain:example.com"), property("https://example.com/")];
-    expect(findExactPropertyMatch("https://example.com", properties)).toBeNull();
+    expect(findExactPropertyMatch("https://example.com", properties)).toEqual({
+      siteUrl: "https://example.com/",
+      type: "url_prefix",
+    });
+  });
+
+  it("prefers the exact url-prefix property over a covering domain property, www variant", () => {
+    const properties = [property("sc-domain:example.com"), property("https://www.example.com/")];
+    expect(findExactPropertyMatch("https://www.example.com", properties)).toEqual({
+      siteUrl: "https://www.example.com/",
+      type: "url_prefix",
+    });
+  });
+
+  it("falls back to the domain property when the url-prefix property present doesn't match this site", () => {
+    // The url-prefix property is for an unrelated path, so it never enters
+    // the url-prefix candidate set — only the domain property remains, and
+    // it alone is not ambiguous.
+    const properties = [property("sc-domain:example.com"), property("https://example.com/blog/")];
+    expect(findExactPropertyMatch("https://example.com", properties)).toEqual({
+      siteUrl: "sc-domain:example.com",
+      type: "domain",
+    });
   });
 
   it("dedupes an identical duplicate property entry rather than treating it as ambiguous", () => {
