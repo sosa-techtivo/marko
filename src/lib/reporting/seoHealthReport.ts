@@ -21,6 +21,13 @@ export type CrawlPageRow = {
   h1: string | null;
   canonical_url: string | null;
   is_indexable: boolean;
+  /** The URL this page's fetch actually landed on after following any
+   * redirects (see redirect transparency, crawl_pages.final_url) — used
+   * only to identify the narrow "seed entry redirect" exclusion below;
+   * not otherwise part of this report. */
+  final_url?: string | null;
+  /** Number of redirect hops to reach `final_url` (0 if none) — see above. */
+  redirect_count?: number;
 };
 
 export type CrawlIssueRow = {
@@ -58,6 +65,55 @@ function isKnownIssueType(type: string): type is CrawlIssueType {
   return Object.prototype.hasOwnProperty.call(ISSUE_TAXONOMY, type);
 }
 
+function extractHostname(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `issue` exists *only* because the crawl's seed page was fetched
+ * at the site's registered URL and that URL happens to redirect elsewhere
+ * — not a real, ongoing SEO problem with the effective website, just an
+ * artifact of which entry-point URL was registered. Narrowly scoped:
+ *
+ *  - Only ever applies to the seed page itself (`page.url === registeredUrl`)
+ *    — a redirect discovered on any other, non-seed page is a real,
+ *    genuine finding and is never excluded here.
+ *  - `redirected` on the seed: excluded outright once the seed page is
+ *    confirmed to have actually redirected (`redirect_count > 0`).
+ *  - `invalid_canonical` on the seed: excluded *only* when the page's own
+ *    canonical tag correctly, exactly points at the host the seed
+ *    actually resolved to (`final_url`) — i.e. the "different domain"
+ *    this finding names is precisely the pre-redirect entry host versus
+ *    the real, effective host, and nothing else. A canonical that's
+ *    empty, unparsable, or points at some other unrelated domain is never
+ *    excluded — it remains a genuine finding regardless of the entry
+ *    redirect.
+ */
+function isSeedEntryRedirectArtifact(
+  issue: CrawlIssueRow,
+  page: CrawlPageRow | undefined,
+  registeredUrl: string | undefined,
+): boolean {
+  if (!page || !registeredUrl) return false;
+  if (page.url !== registeredUrl) return false;
+  if (!page.redirect_count || !page.final_url) return false;
+
+  if (issue.issue_type === "redirected") return true;
+
+  if (issue.issue_type === "invalid_canonical") {
+    if (!page.canonical_url) return false;
+    const canonicalHost = extractHostname(page.canonical_url);
+    const effectiveHost = extractHostname(page.final_url);
+    return canonicalHost !== null && canonicalHost === effectiveHost;
+  }
+
+  return false;
+}
+
 function buildPositiveSignals(pages: CrawlPageRow[]): string[] {
   if (pages.length === 0) return [];
 
@@ -91,14 +147,33 @@ function buildPositiveSignals(pages: CrawlPageRow[]): string[] {
   return signals;
 }
 
+/**
+ * `registeredUrl` — the site's registered URL (`sites.url`) — is optional
+ * and purely additive: passing it enables the narrow seed-entry-redirect
+ * exclusion (see `isSeedEntryRedirectArtifact`); omitting it (or passing
+ * page rows without `final_url`/`redirect_count`) reproduces this
+ * function's exact previous behavior, so every existing/omitted caller is
+ * unaffected.
+ */
 export function buildSeoHealthReport(
   pages: CrawlPageRow[],
   issues: CrawlIssueRow[],
+  registeredUrl?: string,
 ): SeoHealthReport {
-  const pageUrlById = new Map(pages.map((p) => [p.id, p.url]));
+  const pageById = new Map(pages.map((p) => [p.id, p]));
+
+  // Excluded here, before any counting/grouping below, so the summary
+  // stats, the opportunities list, and the positive-signals fallback all
+  // consistently reflect the same "main report" view. This never touches
+  // `pages` (crawl coverage/"Pages analyzed" is unaffected) or the raw
+  // `issues` a caller already has independently for per-page detail —
+  // only which issues this function's own aggregation counts.
+  const countedIssues = issues.filter(
+    (issue) => !isSeedEntryRedirectArtifact(issue, pageById.get(issue.crawl_page_id), registeredUrl),
+  );
 
   const byType = new Map<CrawlIssueType, SeoOpportunity>();
-  for (const issue of issues) {
+  for (const issue of countedIssues) {
     if (!isKnownIssueType(issue.issue_type)) continue;
     const taxonomy = ISSUE_TAXONOMY[issue.issue_type];
 
@@ -116,7 +191,7 @@ export function buildSeoHealthReport(
       byType.set(issue.issue_type, opportunity);
     }
     opportunity.affectedPages.push({
-      url: pageUrlById.get(issue.crawl_page_id) ?? "Unknown page",
+      url: pageById.get(issue.crawl_page_id)?.url ?? "Unknown page",
       message: issue.message,
     });
   }
@@ -127,8 +202,8 @@ export function buildSeoHealthReport(
     return b.affectedPages.length - a.affectedPages.length;
   });
 
-  const pagesWithIssues = new Set(issues.map((i) => i.crawl_page_id)).size;
-  const highPriorityIssues = issues.filter(
+  const pagesWithIssues = new Set(countedIssues.map((i) => i.crawl_page_id)).size;
+  const highPriorityIssues = countedIssues.filter(
     (i) => isKnownIssueType(i.issue_type) && ISSUE_TAXONOMY[i.issue_type].priority === "high",
   ).length;
 
@@ -137,9 +212,9 @@ export function buildSeoHealthReport(
       pagesAnalyzed: pages.length,
       pagesWithIssues,
       highPriorityIssues,
-      totalIssues: issues.length,
+      totalIssues: countedIssues.length,
     },
     opportunities,
-    positiveSignals: issues.length === 0 ? buildPositiveSignals(pages) : [],
+    positiveSignals: countedIssues.length === 0 ? buildPositiveSignals(pages) : [],
   };
 }

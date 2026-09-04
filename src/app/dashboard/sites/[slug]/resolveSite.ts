@@ -10,6 +10,7 @@ export type ResolvedSite = {
   favicon_url: string | null;
   search_console_property_url: string | null;
   search_console_property_type: string | null;
+  effective_url: string | null;
 };
 
 /**
@@ -36,7 +37,7 @@ export async function resolveSiteBySlug(
   const { data } = await supabase
     .from("sites")
     .select(
-      "id, name, url, slug, favicon_url, search_console_property_url, search_console_property_type",
+      "id, name, url, slug, favicon_url, search_console_property_url, search_console_property_type, effective_url",
     )
     .eq("organization_id", organizationId)
     .eq("slug", slug)

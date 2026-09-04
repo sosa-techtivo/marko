@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUserAndOrganization } from "@/lib/organizations";
 import { isBotProtectionFailureMessage } from "@/lib/crawler/botProtection";
 import { SitesGrid, type SiteCardData } from "@/components/SitesGrid";
-import { deriveSiteHealthSummary } from "@/lib/reporting/siteHealthStatus";
+import { deriveSiteHealthSummary, deriveSiteHealthSummaryFromCounts } from "@/lib/reporting/siteHealthStatus";
+import { buildSeoHealthReport, type CrawlIssueRow, type CrawlPageRow } from "@/lib/reporting/seoHealthReport";
 import { AddSiteButton } from "@/components/AddSiteButton";
 
 async function createOrganization(formData: FormData) {
@@ -142,15 +143,32 @@ export default async function DashboardPage({
     }
   }
 
-  // Issues for every one of those latest completed runs, in one more query,
-  // then grouped in memory by crawl_run_id.
+  // Pages + issues for every one of those latest completed runs, in two
+  // more (still batched, not per-site) queries, grouped in memory by
+  // crawl_run_id — the same two row sets buildSeoHealthReport takes on the
+  // site detail page, so the list applies the exact same seed-entry-
+  // redirect exclusion rather than re-deriving totals a different way.
   const latestRunIds = Array.from(latestCompletedRunBySiteId.values()).map((run) => run.id);
-  const issuesByRunId = new Map<string, { issue_type: string }[]>();
+  const pagesByRunId = new Map<string, (CrawlPageRow & { crawl_run_id: string })[]>();
+  const issuesByRunId = new Map<string, (CrawlIssueRow & { crawl_run_id: string })[]>();
 
   if (latestRunIds.length > 0) {
+    const { data: pages } = await supabase
+      .from("crawl_pages")
+      .select(
+        "id, crawl_run_id, url, http_status, title, meta_description, h1, canonical_url, is_indexable, final_url, redirect_count",
+      )
+      .in("crawl_run_id", latestRunIds);
+
+    for (const page of pages ?? []) {
+      const list = pagesByRunId.get(page.crawl_run_id) ?? [];
+      list.push(page);
+      pagesByRunId.set(page.crawl_run_id, list);
+    }
+
     const { data: issues } = await supabase
       .from("crawl_issues")
-      .select("crawl_run_id, issue_type")
+      .select("id, crawl_run_id, crawl_page_id, issue_type, message")
       .in("crawl_run_id", latestRunIds);
 
     for (const issue of issues ?? []) {
@@ -161,7 +179,7 @@ export default async function DashboardPage({
   }
 
   // Pure view-model derivation — every value here comes straight from the
-  // existing queries/logic above (deriveSiteHealthSummary,
+  // existing queries/logic above (buildSeoHealthReport,
   // isBotProtectionFailureMessage); nothing is reinvented, just packaged
   // as plain serializable data for the client-side search/filter grid.
   const siteCards: SiteCardData[] = (sites ?? []).map((site) => {
@@ -170,9 +188,18 @@ export default async function DashboardPage({
     const isBlocked =
       latestAttempt?.status === "failed" &&
       isBotProtectionFailureMessage(latestAttempt.error_message);
-    const health = deriveSiteHealthSummary(
-      latestCompletedRun ? (issuesByRunId.get(latestCompletedRun.id) ?? []) : null,
-    );
+    // Same shared aggregation the site detail page uses (including its
+    // seed-entry-redirect exclusion) — never a second, independent count.
+    const healthReport = latestCompletedRun
+      ? buildSeoHealthReport(
+          pagesByRunId.get(latestCompletedRun.id) ?? [],
+          issuesByRunId.get(latestCompletedRun.id) ?? [],
+          site.url,
+        )
+      : null;
+    const health = healthReport
+      ? deriveSiteHealthSummaryFromCounts(healthReport.summary.totalIssues, healthReport.summary.highPriorityIssues)
+      : deriveSiteHealthSummary(null);
 
     return {
       id: site.id,

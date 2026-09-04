@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireUserAndOrganization } from "@/lib/organizations";
 import { runCrawl } from "@/lib/crawler/runCrawl";
+import { deriveSeedEffectiveUrl } from "@/lib/sites/effectiveUrl";
 import {
   buildSeoHealthReport,
   type CrawlPageRow,
@@ -77,6 +78,25 @@ export async function runSeoAnalysis(formData: FormData) {
       console.error("[runSeoAnalysis] update_site_favicon RPC failed", {
         code: faviconError.code,
         message: faviconError.message,
+      });
+    }
+
+    // The seed page is always result.pages[0] (see runCrawl.ts) — its
+    // finalUrl is the site's real, currently-known destination. Only ever
+    // written here, inside this success branch: a failed crawl (handled
+    // below) never reaches this, so effective_url is never cleared or
+    // changed by a failure — the last known good value is preserved.
+    const { error: effectiveUrlError } = await supabase
+      .from("sites")
+      .update({ effective_url: deriveSeedEffectiveUrl(result.pages[0]?.finalUrl ?? null, site.url) })
+      .eq("id", site.id);
+    if (effectiveUrlError) {
+      // Non-fatal: every read path already falls back to the registered
+      // URL (site.url) when effective_url is unset, so this just delays
+      // the effective-URL-aware behavior until a later successful crawl.
+      console.error("[runSeoAnalysis] failed to update site effective_url", {
+        code: effectiveUrlError.code,
+        message: effectiveUrlError.message,
       });
     }
   }
@@ -252,9 +272,23 @@ export async function getCrawlRunDetail(
     return { ok: false, error: "That analysis could not be found." };
   }
 
+  // Same tenant double-check as the crawl_runs lookup above — needed here
+  // only to identify this run's seed page for buildSeoHealthReport's
+  // narrow seed-entry-redirect exclusion (see seoHealthReport.ts); a
+  // site's registered URL never changes after creation, so this is valid
+  // for any historical run, not just the current one.
+  const { data: site } = await supabase
+    .from("sites")
+    .select("url")
+    .eq("id", siteId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const { data: pages } = await supabase
     .from("crawl_pages")
-    .select("id, url, http_status, title, meta_description, h1, canonical_url, is_indexable")
+    .select(
+      "id, url, http_status, title, meta_description, h1, canonical_url, is_indexable, final_url, redirect_count",
+    )
     .eq("crawl_run_id", run.id)
     .order("created_at", { ascending: true });
 
@@ -263,7 +297,7 @@ export async function getCrawlRunDetail(
     .select("id, crawl_page_id, issue_type, severity, message")
     .eq("crawl_run_id", run.id);
 
-  const healthReport = buildSeoHealthReport(pages ?? [], issues ?? []);
+  const healthReport = buildSeoHealthReport(pages ?? [], issues ?? [], site?.url);
 
   return {
     ok: true,

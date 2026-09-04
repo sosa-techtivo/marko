@@ -10,7 +10,10 @@ import { isBotProtectionFailureMessage } from "@/lib/crawler/botProtection";
 import { checkSiteEmbeddable } from "@/lib/preview/checkEmbeddable";
 import { WebsitePreviewCard } from "@/components/WebsitePreviewCard";
 import { SiteHealthGauge, HealthIndicator } from "@/components/SitesGrid";
-import { deriveSiteHealthSummary } from "@/lib/reporting/siteHealthStatus";
+import {
+  deriveSiteHealthSummary,
+  deriveSiteHealthSummaryFromCounts,
+} from "@/lib/reporting/siteHealthStatus";
 import { StatusBadge, SummaryStat } from "@/components/seoReport/badges";
 import { AnalysisHistorySection } from "@/components/seoReport/AnalysisHistoryList";
 import { SeoProgressChart } from "@/components/seoReport/SeoProgressChart";
@@ -29,6 +32,7 @@ import { ChangesCardSkeleton } from "@/components/seoReport/ChangesCardSkeleton"
 import { ProgressCardSkeleton } from "@/components/seoReport/ProgressCardSkeleton";
 import { MarkoInsightsCardSkeleton } from "@/components/seoReport/MarkoInsightsCardSkeleton";
 import { AnalysisHistorySkeleton } from "@/components/seoReport/AnalysisHistorySkeleton";
+import { describeRegisteredUrlRedirect, resolveEffectiveSiteUrl } from "@/lib/sites/effectiveUrl";
 import { getGoogleConnectionStatus } from "@/lib/googleSearchConsole/connectionStatus";
 import { getSiteSearchConsoleSnapshot } from "@/lib/googleSearchConsole/siteSnapshot";
 
@@ -62,6 +66,16 @@ export default async function SiteDetailPage({
   if (!site) {
     notFound();
   }
+
+  // The site's real, currently-known destination — its effective URL once
+  // a successful crawl has discovered one, else its registered URL
+  // unchanged (see effectiveUrl.ts). Drives anything that should reflect
+  // where the site actually lives: Website Preview and Search Console
+  // property matching. The crawl itself always starts from site.url
+  // (never effectiveSiteUrl) — see runSeoAnalysis in actions.ts — so a
+  // redirect is re-confirmed, not assumed, on every run.
+  const effectiveSiteUrl = resolveEffectiveSiteUrl(site);
+  const registeredUrlRedirectNote = describeRegisteredUrlRedirect(site.url, site.effective_url);
 
   // Kicked off now (not awaited until render) so this independent, up-to-5s
   // header check runs concurrently with the Supabase queries below instead
@@ -141,7 +155,7 @@ export default async function SiteDetailPage({
     ? await supabase
         .from("crawl_pages")
         .select(
-          "id, url, http_status, title, meta_description, h1, canonical_url, is_indexable",
+          "id, url, http_status, title, meta_description, h1, canonical_url, is_indexable, final_url, redirect_count",
         )
         .eq("crawl_run_id", latestCompletedRun.id)
         .order("created_at", { ascending: true })
@@ -155,19 +169,27 @@ export default async function SiteDetailPage({
     : { data: null };
 
   const healthReport = latestCompletedRun
-    ? buildSeoHealthReport(crawlPages ?? [], crawlIssues ?? [])
+    ? buildSeoHealthReport(crawlPages ?? [], crawlIssues ?? [], site.url)
     : null;
 
   // Same categorical status/logic as the dashboard cards (SitesGrid) — no
-  // separate scoring is introduced here.
-  const siteHealth = deriveSiteHealthSummary(latestCompletedRun ? (crawlIssues ?? []) : null);
+  // separate scoring is introduced here. Derived from `healthReport`'s own
+  // already-filtered counts (not a second, independent pass over the raw
+  // `crawlIssues`), so the gauge/badge can never disagree with the
+  // "Total opportunities"/"High-priority issues" stats shown right below it.
+  const siteHealth = healthReport
+    ? deriveSiteHealthSummaryFromCounts(healthReport.summary.totalIssues, healthReport.summary.highPriorityIssues)
+    : deriveSiteHealthSummary(null);
 
   // SEO progress chart data — only fetched/built when there's actually a
   // trend to show (2+ completed analyses). `olderCompletedRuns` excludes
   // the latest one, since its totals are already known via
   // `healthReport.summary` above; only a lightweight {crawl_run_id,
-  // issue_type} query is needed for the rest, reusing the exact same
-  // deriveSiteHealthSummary used for `siteHealth` — no new scoring.
+  // issue_type} query is needed for the rest. These older points
+  // deliberately do NOT apply buildSeoHealthReport's seed-entry-redirect
+  // exclusion (that would need each older run's own crawl_pages too, a
+  // per-point query this trend doesn't otherwise need) — a known,
+  // narrower scope than the current-run stats above, not a regression.
   const olderCompletedRuns = hasMultipleCompletedAnalyses ? (completedRuns ?? []).slice(1) : [];
   const olderCompletedRunIds = olderCompletedRuns.map((run) => run.id);
 
@@ -294,6 +316,11 @@ export default async function SiteDetailPage({
               <span className="text-zinc-400"> · </span>
               <span className="text-zinc-500">{site.url}</span>
             </h1>
+            {registeredUrlRedirectNote && (
+              <span className="w-full shrink-0 basis-full text-[11px] text-zinc-400">
+                {registeredUrlRedirectNote}
+              </span>
+            )}
           </div>
           <RunAnalysisButton siteId={site.id} />
         </div>
@@ -496,7 +523,7 @@ export default async function SiteDetailPage({
             <PreviewHeightMeasuredBox>
               <WebsitePreviewCard
                 siteName={site.name}
-                url={site.url}
+                url={effectiveSiteUrl}
                 faviconUrl={site.favicon_url}
                 embedStatus={embedCheck}
               />
@@ -504,7 +531,7 @@ export default async function SiteDetailPage({
             <GoogleSearchConsoleCard
               siteId={site.id}
               siteSlug={site.slug}
-              siteUrl={site.url}
+              siteUrl={effectiveSiteUrl}
               connection={gscConnection}
               initialProperty={
                 site.search_console_property_url && site.search_console_property_type

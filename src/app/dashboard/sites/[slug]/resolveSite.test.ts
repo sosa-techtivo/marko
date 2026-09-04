@@ -32,6 +32,7 @@ const SITE: ResolvedSite = {
   favicon_url: null,
   search_console_property_url: null,
   search_console_property_type: null,
+  effective_url: null,
 };
 
 describe("resolveSiteBySlug", () => {

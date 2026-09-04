@@ -59,6 +59,7 @@ export type Database = {
           archived_at: string | null;
           search_console_property_url: string | null;
           search_console_property_type: string | null;
+          effective_url: string | null;
           created_at: string;
         };
         Insert: {
@@ -71,6 +72,7 @@ export type Database = {
           archived_at?: string | null;
           search_console_property_url?: string | null;
           search_console_property_type?: string | null;
+          effective_url?: string | null;
           created_at?: string;
         };
         Update: {
@@ -83,6 +85,7 @@ export type Database = {
           archived_at?: string | null;
           search_console_property_url?: string | null;
           search_console_property_type?: string | null;
+          effective_url?: string | null;
           created_at?: string;
         };
         Relationships: [
