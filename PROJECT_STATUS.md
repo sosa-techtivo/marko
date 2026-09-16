@@ -932,3 +932,216 @@ score must be explainable... rather than arbitrary AI judgment").
 UI track (independent, not blocking the above): extend the Techtivo/MARKO
 visual identity to the SEO report page itself (including the new Search
 Console card), which the branding pass deliberately left untouched.
+
+---
+
+## AI Visibility — Delivery 1A (first vertical slice)
+
+**Status: first real end-to-end vertical slice implemented — NOT the
+complete AI Visibility delivery.** This proves the workflow (Site → AI
+Visibility questions → one real AI provider → web-grounded execution → raw
+response + sources/evidence → deterministic first-pass metrics →
+persisted historical run → visible/testable MARKO UI) with deliberately
+small scope: one provider, one metric set, no scheduling, no competitors.
+
+### What's implemented
+
+- **New route**: `/dashboard/sites/[slug]/ai-visibility` (linked from the
+  existing site detail page's header) — lets a user add/edit/deactivate a
+  small set of AI Visibility questions (an optional free-text category),
+  start a run, and browse run history/results. Deliberately its own page,
+  not another card squeezed into the already-dense SEO report layout.
+- **Data model** (`supabase/migrations/0014_ai_visibility.sql`, **applied
+  to the linked Supabase project on 2026-09-16** via `npx supabase db
+  push` — see Manual QA below):
+  `ai_visibility_questions` (per-site, deactivate-don't-delete, same
+  archive posture as `sites`), `ai_visibility_runs` (historical, same
+  never-overwritten shape as `crawl_runs`), `ai_visibility_results` (one
+  row per question execution — raw answer, structured `sources` evidence,
+  raw provider response, and this slice's metrics). Same tenant-isolation
+  pattern as the SEO tables: `organization_id` denormalized onto every
+  row, RLS scoped via `organization_memberships`, explicit base-table
+  grants.
+- **Provider**: OpenAI's Responses API
+  (`src/lib/aiVisibility/providers/openai.ts`) with the `web_search` tool
+  enabled — confirmed against OpenAI's current official documentation at
+  implementation time. This measures how OpenAI's API responds when it
+  can search the live web; it is **not** a reproduction of a chatgpt.com
+  consumer session (different product surface/default behavior), and
+  nothing in the UI claims otherwise. `OPENAI_API_KEY` and `OPENAI_MODEL`
+  are both required server-only env vars (see `.env.example`) — no model
+  identifier is hardcoded, since OpenAI's current model lineup couldn't be
+  independently verified beyond the documentation excerpts available at
+  implementation time; an operator must supply the exact production model
+  id.
+- **Provider boundary**: `src/lib/aiVisibility/providers/types.ts` defines
+  a small normalized result shape (provider id, model, answer text,
+  structured sources, usage, error state) that the rest of MARKO consumes
+  — nothing outside `providers/openai.ts` touches an OpenAI-specific
+  response object, so a later task can add Gemini/Perplexity without
+  touching the domain model, persistence, or UI.
+- **Metrics implemented** (`src/lib/aiVisibility/metrics.ts`), all
+  deterministic, no second evaluator LLM:
+  - **Mentioned** — case-insensitive substring match of the site's
+    canonical business name (`sites.name`, the name MARKO already asks
+    for at site creation — no new field introduced) against the answer
+    text.
+  - **Cited** — whether any returned source's normalized domain
+    (lowercased, `www.`-stripped) exactly matches the analyzed site's own
+    domain. Never inferred from the brand name appearing in the answer
+    text — a citation is evaluated only by domain.
+  - **Prominence (deterministic only)** — `first_mention_index`: the
+    character offset of the brand name's first case-insensitive
+    occurrence in the answer text. Explicitly *not* a normalized/weighted
+    prominence score.
+  - Every metric is `null` (not evaluated) rather than `false`/`0` when it
+    genuinely can't be evaluated (a failed question, or a blank brand
+    name) — kept distinguishable from a genuine negative result at every
+    layer (metrics → persisted columns → UI badges).
+- **Execution**: synchronous within the "Run AI Visibility analysis"
+  Server Action (`src/app/dashboard/sites/[slug]/ai-visibility/actions.ts`,
+  orchestrated by `src/lib/aiVisibility/runAiVisibility.ts`), batched at a
+  conservative concurrency of 3 — acceptable for this slice's ~5–10
+  question volume, same "manual, in-request" posture the SEO crawl
+  already has. A missing `OPENAI_API_KEY`/`OPENAI_MODEL` is checked once,
+  up front, and recorded as a single failed run with a clear message,
+  rather than attempting every question only to have each fail
+  identically. A single question's failure (provider error, timeout,
+  empty answer) never throws and never prevents the rest of the run's
+  questions from executing or being persisted — every outcome (success
+  and failure alike) is written in one bulk insert.
+- **History**: the AI Visibility page lists previous runs (status,
+  succeeded/failed counts) and opens any one of them in a detail modal
+  showing every question's answer, sources, and metrics — the same
+  list-plus-detail-modal pattern as the SEO report's Analysis History.
+
+### Manual QA (2026-09-16, against the real linked database)
+
+- **Migration applied**: `0014_ai_visibility.sql` was pushed to the linked
+  Supabase project via `npx supabase db push` (migration history showed
+  `0001`–`0013` already aligned local/remote and `0014` pending
+  beforehand; the push completed with `Applying migration
+  0014_ai_visibility.sql...` / `Finished supabase db push.`). No longer a
+  limitation — the AI Visibility page now reads/writes real data.
+- **CRUD/persistence, manually verified end-to-end**: the AI Visibility
+  page loads; question creation, editing, deactivation, and reactivation
+  all work; the active count updates correctly; data survives a manual
+  browser refresh.
+- **Provider execution remains unvalidated against a live account** — see
+  the next bullet. No OpenAI call has been made against this project yet.
+
+### Known limitations
+
+- **No live OpenAI smoke test has been performed.** `OPENAI_API_KEY` is
+  intentionally not configured yet (provider billing has not been set
+  up) — this is a deliberate, pending step, not an oversight. Provider
+  request/response parsing was validated entirely against mocked HTTP
+  responses built from OpenAI's documented Responses API shape; real
+  network behavior, citation availability, and answer determinism remain
+  unverified against a live account. **Real AI Visibility provider
+  execution must not be treated as validated until this smoke test runs.**
+- **Mentioned** only matches the exact `sites.name` string
+  (case-insensitively) — no synonym/abbreviation handling. A brand
+  mentioned under a genuinely different name/spelling will read as "not
+  mentioned."
+- **Cited** is a domain-only signal — a source whose title/content
+  discusses the site's brand but points at an unrelated domain (e.g. a
+  news article) is correctly not counted as a citation of the site
+  itself.
+- Concurrency (3) and timeout (45s per question) are conservative,
+  untuned defaults for a small question set — not validated against real
+  OpenAI latency/rate limits without a live smoke test.
+- `maxDuration = 180` is declared on the AI Visibility route, but actual
+  enforcement depends on the hosting plan/tier — a large active question
+  set combined with slow provider responses could still exceed a
+  constrained serverless timeout. Background/scheduled execution
+  (removing this constraint entirely) is explicitly deferred to Delivery
+  4, not this slice.
+- Question categories are free text, not a managed taxonomy — sufficient
+  for ~5–10 questions, not a categorization system.
+
+### Explicitly deferred (from this slice, per the approved scope)
+
+Recommended, Accuracy, Sentiment, a final (subjective) Prominence score,
+an aggregate AI Visibility Score, Gemini, Perplexity, competitors,
+scheduling/cron/queues, the 50–75 production question seed set, AI-generated
+questions, current-vs-previous trend comparison, and any SEO↔GEO
+recommendation mapping. None of these were implemented, even partially.
+
+### Next logical step
+
+The migration is now applied and CRUD/persistence is manually verified
+(see Manual QA above). What remains before building further AI
+Visibility deliveries (Competitive Intelligence, Historical/Automated
+Monitoring, and the Unified Search + AI Visibility Overview) on top of
+this schema: configure `OPENAI_API_KEY`/`OPENAI_MODEL` and perform a
+small (1–2 query) live OpenAI smoke test to confirm the documented
+Responses API shape holds against a real account — still pending.
+
+---
+
+## AI Visibility — Delivery 1B (question management at 50–75 question scale)
+
+**Status: complete.** Delivery 1A's question UI (add/edit/deactivate/
+reactivate) was built and manually validated for a handful of questions;
+this delivery makes that same UI practical for the ~50–75 questions the
+real product needs per site, with **no database migration, schema
+change, RLS change, or new environment variable** — filtering runs
+entirely client-side over the question set the page was already loading.
+
+### What's implemented
+
+- **Search**: case-insensitive substring match against question text.
+  Client-side only (no new query); an empty search restores the full list.
+- **Status filter**: All / Active / Inactive, reusing the existing
+  `is_active` column — no new status values.
+- **Category filter**: derived from the distinct `category` values already
+  present on the site's questions (sorted, case-insensitive), plus a
+  separate "Uncategorized" option when at least one question has no
+  category. No category-management subsystem, no categories table.
+- **Counts**: active/inactive/total always shown; a "Showing N of M" count
+  appears only once a filter is applied, so a filtered-empty result is
+  never confused with "no questions configured."
+- **Empty/filter states**: distinct copy for "no questions configured yet"
+  (`totalCount === 0`) vs. "no questions match the current search/filters"
+  (filters active, zero results) — the two are never conflated.
+- **List presentation**: unchanged compact row styling (`QuestionRow.tsx`,
+  not modified), now inside a `max-h-[32rem] overflow-y-auto` scroll
+  region so a 50–75 row list doesn't push the rest of the page down — no
+  pagination, per the approved scope.
+- **New files**: `src/lib/aiVisibility/questionFilters.ts` (pure,
+  unit-tested: `filterQuestions`, `getQuestionCategories`,
+  `hasUncategorizedQuestions`) and
+  `src/components/aiVisibility/QuestionsPanel.tsx` (client component
+  owning the search/filter UI state, rendering the existing `QuestionRow`
+  list). `page.tsx` now renders `QuestionsPanel` in place of its old
+  inline list-mapping code; the "X active" header count moved into the
+  panel's richer count line.
+- **No changes** to `actions.ts`, `QuestionRow.tsx`, `NewQuestionForm.tsx`,
+  the AI Visibility Runs panel, or any provider/execution code — Add,
+  Edit, Deactivate, Reactivate, and the run history are exactly Delivery
+  1A's code, unmodified.
+
+### Validation
+
+- `npm test`: 342/342 passing (46 in `src/lib/aiVisibility/`, including 12
+  new `questionFilters.test.ts` cases covering search, each status filter,
+  category filter (including the uncategorized sentinel), composed
+  filters, and the empty-result case).
+- `npx tsc --noEmit`, `npx eslint` (changed files), and `npm run build`
+  all clean.
+- **Manual QA (2026-09-16, against the linked database, 6 real test
+  questions)**: case-insensitive search (`mobile app` → 1 of 6), category
+  filter (`Software Development` → 3 of 6), combined category + search
+  (`Software Development` + `custom` → 1 of 6), status filter after
+  deactivating one question (5 active / 1 inactive / 6 total, `Inactive`
+  filter correctly isolated it), `Uncategorized` filter correctly isolated
+  the one question with no category, filtered-result counts displayed
+  correctly throughout, and existing CRUD remained functional.
+- No OpenAI/provider call was made — this delivery is UI/filtering only.
+
+### Known limitations / deferred (unchanged from the approved scope)
+
+Bulk actions, drag-and-drop ordering, CSV import/export, AI-generated
+questions, question templates, and a managed category taxonomy remain
+out of scope, as in Delivery 1A. Categories remain free text.

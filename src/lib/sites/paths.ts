@@ -16,3 +16,10 @@ export function siteDetailPath(slug: string): string {
 export function siteReportPdfPath(slug: string): string {
   return `${siteDetailPath(slug)}/report`;
 }
+
+/** Canonical path to a Site's AI Visibility page (see
+ * src/app/dashboard/sites/[slug]/ai-visibility/page.tsx) — same
+ * slug-based convention as siteDetailPath. */
+export function siteAiVisibilityPath(slug: string): string {
+  return `${siteDetailPath(slug)}/ai-visibility`;
+}

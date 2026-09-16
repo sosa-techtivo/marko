@@ -33,7 +33,7 @@ import { ProgressCardSkeleton } from "@/components/seoReport/ProgressCardSkeleto
 import { MarkoInsightsCardSkeleton } from "@/components/seoReport/MarkoInsightsCardSkeleton";
 import { AnalysisHistorySkeleton } from "@/components/seoReport/AnalysisHistorySkeleton";
 import { describeRegisteredUrlRedirect, resolveEffectiveSiteUrl } from "@/lib/sites/effectiveUrl";
-import { siteReportPdfPath } from "@/lib/sites/paths";
+import { siteAiVisibilityPath, siteReportPdfPath } from "@/lib/sites/paths";
 import { DownloadReportButton } from "@/components/seoReport/DownloadReportButton";
 import { getGoogleConnectionStatus } from "@/lib/googleSearchConsole/connectionStatus";
 import { getSiteSearchConsoleSnapshot } from "@/lib/googleSearchConsole/siteSnapshot";
@@ -326,6 +326,17 @@ export default async function SiteDetailPage({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {/* Links to the new (separate-route) AI Visibility slice —
+                deliberately its own page rather than another card squeezed
+                into this already-dense 3-column report, per this
+                milestone's "do not redesign the site dashboard/navigation
+                beyond what is required" scope. */}
+            <Link
+              href={siteAiVisibilityPath(site.slug)}
+              className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+            >
+              AI Visibility
+            </Link>
             {/* A client component that fetches the PDF route and triggers
                 the download from the response Blob, so the button can show
                 "Generating PDF…" while the server renders it instead of

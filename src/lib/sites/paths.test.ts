@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { siteDetailPath, siteReportPdfPath } from "./paths";
+import { siteAiVisibilityPath, siteDetailPath, siteReportPdfPath } from "./paths";
 
 const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
@@ -24,5 +24,15 @@ describe("siteReportPdfPath", () => {
 
   it("never embeds a UUID-shaped identifier", () => {
     expect(siteReportPdfPath("techtivo")).not.toMatch(UUID_PATTERN);
+  });
+});
+
+describe("siteAiVisibilityPath", () => {
+  it("builds a slug-based AI Visibility path under the site's detail path", () => {
+    expect(siteAiVisibilityPath("techtivo")).toBe("/dashboard/sites/techtivo/ai-visibility");
+  });
+
+  it("never embeds a UUID-shaped identifier", () => {
+    expect(siteAiVisibilityPath("techtivo")).not.toMatch(UUID_PATTERN);
   });
 });

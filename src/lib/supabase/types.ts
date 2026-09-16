@@ -329,6 +329,196 @@ export type Database = {
           },
         ];
       };
+      ai_visibility_questions: {
+        Row: {
+          id: string;
+          site_id: string;
+          organization_id: string;
+          question_text: string;
+          category: string | null;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          site_id: string;
+          organization_id: string;
+          question_text: string;
+          category?: string | null;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          site_id?: string;
+          organization_id?: string;
+          question_text?: string;
+          category?: string | null;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "ai_visibility_questions_site_id_fkey";
+            columns: ["site_id"];
+            isOneToOne: false;
+            referencedRelation: "sites";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "ai_visibility_questions_organization_id_fkey";
+            columns: ["organization_id"];
+            isOneToOne: false;
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      ai_visibility_runs: {
+        Row: {
+          id: string;
+          site_id: string;
+          organization_id: string;
+          triggered_by: string;
+          status: string;
+          provider: string;
+          model: string;
+          started_at: string;
+          completed_at: string | null;
+          question_count: number;
+          succeeded_count: number;
+          failed_count: number;
+          error_message: string | null;
+        };
+        Insert: {
+          id?: string;
+          site_id: string;
+          organization_id: string;
+          triggered_by: string;
+          status?: string;
+          provider: string;
+          model: string;
+          started_at?: string;
+          completed_at?: string | null;
+          question_count?: number;
+          succeeded_count?: number;
+          failed_count?: number;
+          error_message?: string | null;
+        };
+        Update: {
+          id?: string;
+          site_id?: string;
+          organization_id?: string;
+          triggered_by?: string;
+          status?: string;
+          provider?: string;
+          model?: string;
+          started_at?: string;
+          completed_at?: string | null;
+          question_count?: number;
+          succeeded_count?: number;
+          failed_count?: number;
+          error_message?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "ai_visibility_runs_site_id_fkey";
+            columns: ["site_id"];
+            isOneToOne: false;
+            referencedRelation: "sites";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "ai_visibility_runs_organization_id_fkey";
+            columns: ["organization_id"];
+            isOneToOne: false;
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      ai_visibility_results: {
+        Row: {
+          id: string;
+          run_id: string;
+          question_id: string;
+          organization_id: string;
+          status: string;
+          provider: string;
+          model: string;
+          answer_text: string | null;
+          sources: unknown;
+          mentioned: boolean | null;
+          cited: boolean | null;
+          first_mention_index: number | null;
+          usage: unknown;
+          raw_response: unknown;
+          error_message: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          run_id: string;
+          question_id: string;
+          organization_id: string;
+          status: string;
+          provider: string;
+          model: string;
+          answer_text?: string | null;
+          sources?: unknown;
+          mentioned?: boolean | null;
+          cited?: boolean | null;
+          first_mention_index?: number | null;
+          usage?: unknown;
+          raw_response?: unknown;
+          error_message?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          run_id?: string;
+          question_id?: string;
+          organization_id?: string;
+          status?: string;
+          provider?: string;
+          model?: string;
+          answer_text?: string | null;
+          sources?: unknown;
+          mentioned?: boolean | null;
+          cited?: boolean | null;
+          first_mention_index?: number | null;
+          usage?: unknown;
+          raw_response?: unknown;
+          error_message?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "ai_visibility_results_run_id_fkey";
+            columns: ["run_id"];
+            isOneToOne: false;
+            referencedRelation: "ai_visibility_runs";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "ai_visibility_results_question_id_fkey";
+            columns: ["question_id"];
+            isOneToOne: false;
+            referencedRelation: "ai_visibility_questions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "ai_visibility_results_organization_id_fkey";
+            columns: ["organization_id"];
+            isOneToOne: false;
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: Record<string, never>;
     Functions: {
