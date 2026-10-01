@@ -1010,6 +1010,13 @@ small scope: one provider, one metric set, no scheduling, no competitors.
   empty answer) never throws and never prevents the rest of the run's
   questions from executing or being persisted — every outcome (success
   and failure alike) is written in one bulk insert.
+  The insert uses `defaultToNull: false`: a bulk insert lists the union
+  of every row's keys, so without it a failed row's omitted `sources`
+  became NULL and rejected the whole batch (`23502`, fixed 2026-10-01).
+  If the batch is still rejected, rows are retried one by one so one
+  unstorable result never erases its siblings. Run counts reflect the
+  rows actually persisted. Each row failure is logged with run, question,
+  provider and the DB error.
 - **History**: the AI Visibility page lists previous runs (status,
   succeeded/failed counts) and opens any one of them in a detail modal
   showing every question's answer, sources, and metrics — the same

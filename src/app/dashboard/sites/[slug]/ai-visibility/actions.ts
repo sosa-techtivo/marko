@@ -321,17 +321,49 @@ async function runAiVisibilityAnalysis(formData: FormData, executionMethod: AiVi
   // One bulk insert covering every question's outcome — success and
   // failure rows together — so a partial-failure run never has a window
   // where a successful question's evidence exists without the rest of the
-  // run's results, and a failing question never blocks a sibling
-  // success's row from being written.
-  const { error: insertResultsError } = await supabase.from("ai_visibility_results").insert(resultsToInsert);
+  // run's results. A bulk insert sends the union of every row's keys as
+  // its column list, so without `defaultToNull: false` a column one row
+  // omits (a failed row has no `sources`) is written as NULL instead of
+  // its table default — violating `sources not null` and rejecting the
+  // whole batch, successes included.
+  const { error: insertResultsError } = await supabase
+    .from("ai_visibility_results")
+    .insert(resultsToInsert, { defaultToNull: false });
 
+  // If the batch is still rejected, retry row by row so one provider
+  // result that can't be stored never erases its siblings' results.
+  let persistedOutcomes = outcomes;
   if (insertResultsError) {
-    console.error("[runAiVisibilityAnalysis] failed to persist results", {
+    console.error("[runAiVisibilityAnalysis] bulk results insert failed; retrying per provider result", {
+      runId: run.id,
       code: insertResultsError.code,
       message: insertResultsError.message,
       details: insertResultsError.details,
       hint: insertResultsError.hint,
     });
+    persistedOutcomes = [];
+    for (const [index, row] of resultsToInsert.entries()) {
+      const { error: insertResultError } = await supabase
+        .from("ai_visibility_results")
+        .insert([row], { defaultToNull: false });
+      if (insertResultError) {
+        console.error("[runAiVisibilityAnalysis] failed to persist provider result", {
+          runId: run.id,
+          questionId: row.question_id,
+          provider: row.provider,
+          status: row.status,
+          code: insertResultError.code,
+          message: insertResultError.message,
+          details: insertResultError.details,
+          hint: insertResultError.hint,
+        });
+      } else {
+        persistedOutcomes.push(outcomes[index]);
+      }
+    }
+  }
+
+  if (persistedOutcomes.length === 0) {
     await supabase
       .from("ai_visibility_runs")
       .update({
@@ -343,12 +375,19 @@ async function runAiVisibilityAnalysis(formData: FormData, executionMethod: AiVi
     redirect(siteAiVisibilityPath(site.slug));
   }
 
-  const completion = resolveAiVisibilityRunCompletion(outcomes);
+  // Counts describe the persisted results, so the run never claims a
+  // result the history view can't show.
+  const completion = resolveAiVisibilityRunCompletion(persistedOutcomes);
+  const unsavedCount = outcomes.length - persistedOutcomes.length;
+  const errorMessage =
+    unsavedCount > 0
+      ? [completion.errorMessage, `${unsavedCount} provider result(s) could not be saved.`].filter(Boolean).join(" · ")
+      : completion.errorMessage;
   // Web UI model labels (e.g. "gemini-web (Flash-Lite)") are only known
   // once the browsers have loaded, after the run row was created.
   const detectedBrowserModel =
     executionMethod === "browser"
-      ? [...new Set(outcomes.filter((outcome) => outcome.status === "completed").map((outcome) => outcome.model))].join(",")
+      ? [...new Set(persistedOutcomes.filter((outcome) => outcome.status === "completed").map((outcome) => outcome.model))].join(",")
       : undefined;
 
   const { error: completeError } = await supabase
@@ -358,7 +397,7 @@ async function runAiVisibilityAnalysis(formData: FormData, executionMethod: AiVi
       completed_at: new Date().toISOString(),
       succeeded_count: completion.succeededCount,
       failed_count: completion.failedCount,
-      error_message: completion.errorMessage,
+      error_message: errorMessage,
       ...(detectedBrowserModel ? { model: detectedBrowserModel } : {}),
     })
     .eq("id", run.id);
