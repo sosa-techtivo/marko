@@ -23,3 +23,9 @@ export function siteReportPdfPath(slug: string): string {
 export function siteAiVisibilityPath(slug: string): string {
   return `${siteDetailPath(slug)}/ai-visibility`;
 }
+
+/** Canonical path to one AI Visibility provider result's detail view (see
+ * src/app/dashboard/sites/[slug]/ai-visibility/results/[resultId]/page.tsx). */
+export function siteAiVisibilityResultPath(slug: string, resultId: string): string {
+  return `${siteAiVisibilityPath(slug)}/results/${resultId}`;
+}

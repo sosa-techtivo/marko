@@ -9,6 +9,7 @@ import type { AiVisibilityQuestionRowData } from "@/components/aiVisibility/Ques
 import { QuestionsPanel } from "@/components/aiVisibility/QuestionsPanel";
 import { RunAiVisibilityForm } from "@/components/aiVisibility/RunAiVisibilityForm";
 import { AiVisibilityRunHistory, type AiVisibilityHistoryRun } from "@/components/aiVisibility/AiVisibilityRunHistory";
+import { summarizeResultsByProvider } from "@/lib/aiVisibility/runDetail";
 
 // Executed synchronously within this request, batched at low concurrency
 // over a deliberately small question set (~5–10) — see
@@ -31,10 +32,10 @@ export default async function AiVisibilityPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; run?: string }>;
 }) {
   const { slug } = await params;
-  const { error } = await searchParams;
+  const { error, run: openRunId } = await searchParams;
   const { organization } = await requireUserAndOrganization();
 
   if (!organization) {
@@ -56,10 +57,18 @@ export default async function AiVisibilityPage({
 
   const { data: runs } = await supabase
     .from("ai_visibility_runs")
-    .select("id, status, started_at, question_count, succeeded_count, failed_count, error_message")
+    .select("id, status, execution_method, started_at, question_count, succeeded_count, failed_count, error_message")
     .eq("site_id", site.id)
     .order("started_at", { ascending: false })
     .limit(10);
+
+  // Browser runs span two providers; their history rows show per-provider
+  // counts, so a provider failure is never hidden by the other's success.
+  const browserRunIds = (runs ?? []).filter((r) => r.execution_method === "browser").map((r) => r.id);
+  const { data: browserResults } =
+    browserRunIds.length > 0
+      ? await supabase.from("ai_visibility_results").select("run_id, provider, status").in("run_id", browserRunIds)
+      : { data: [] as { run_id: string; provider: string; status: string }[] };
 
   const questionRows: AiVisibilityQuestionRowData[] = (questions ?? []).map((q) => ({
     id: q.id,
@@ -71,6 +80,14 @@ export default async function AiVisibilityPage({
   const historyRuns: AiVisibilityHistoryRun[] = (runs ?? []).map((r) => ({
     id: r.id,
     status: r.status,
+    executionMethod: r.execution_method,
+    providerSummaries:
+      r.execution_method === "browser"
+        ? summarizeResultsByProvider(
+            (browserResults ?? []).filter((result) => result.run_id === r.id),
+            r.execution_method,
+          )
+        : [],
     startedAt: r.started_at,
     questionCount: r.question_count,
     succeededCount: r.succeeded_count,
@@ -100,10 +117,12 @@ export default async function AiVisibilityPage({
       )}
 
       <p className="text-xs text-zinc-500">
-        MARKO measures how OpenAI answers real customer questions about {site.name} when it can search the
-        live web — a first look at AI search visibility, alongside MARKO&apos;s existing SEO analysis. This is
-        a small first slice: OpenAI only, and only the Mentioned/Cited/first-mention metrics below are
-        measured today.
+        MARKO measures how AI answers real customer questions about {site.name} — a first look at AI search
+        visibility, alongside MARKO&apos;s existing SEO analysis. Each run asks the same active questions one of
+        two ways: <span className="font-medium text-zinc-700">API</span> (the AI provider&apos;s programmatic
+        API, with live web search) or <span className="font-medium text-zinc-700">Browser</span> (the
+        consumer Gemini and ChatGPT web apps, driven by a real browser) — so the two can be compared. Only the
+        Mentioned/Cited/first-mention metrics are measured today.
       </p>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -115,7 +134,12 @@ export default async function AiVisibilityPage({
 
         <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 bg-white p-4">
           <h2 className="text-xs font-semibold text-zinc-900">AI Visibility runs</h2>
-          <AiVisibilityRunHistory siteId={site.id} runs={historyRuns} />
+          <AiVisibilityRunHistory
+            siteId={site.id}
+            siteSlug={site.slug}
+            runs={historyRuns}
+            initialOpenRunId={openRunId ?? null}
+          />
         </div>
       </div>
     </div>

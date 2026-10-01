@@ -3,11 +3,19 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireUserAndOrganization } from "@/lib/organizations";
-import { runAiVisibility } from "@/lib/aiVisibility/runAiVisibility";
-import type { AiVisibilitySource } from "@/lib/aiVisibility/providers/types";
+import { resolveAiVisibilityRunCompletion, runAiVisibility } from "@/lib/aiVisibility/runAiVisibility";
+import {
+  getAiVisibilityProviderModel,
+  getConfiguredAiVisibilityProvider,
+  isAiVisibilityProviderConfigured,
+} from "@/lib/aiVisibility/providers/select";
+import { GEMINI_WEB_MODEL, isGeminiBrowserEnabled } from "@/lib/aiVisibility/providers/geminiBrowser";
+import { CHATGPT_WEB_MODEL } from "@/lib/aiVisibility/providers/chatgptBrowser";
+import { PERPLEXITY_WEB_MODEL } from "@/lib/aiVisibility/providers/perplexityBrowser";
+import { CLAUDE_WEB_MODEL } from "@/lib/aiVisibility/providers/claudeBrowser";
+import type { AiVisibilityExecutionMethod } from "@/lib/aiVisibility/providers/types";
+import { summarizeAiVisibilityResult } from "@/lib/aiVisibility/resultSummary";
 import { siteAiVisibilityPath } from "@/lib/sites/paths";
-
-const AI_VISIBILITY_PROVIDER = "openai";
 
 type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -139,12 +147,59 @@ export async function setAiVisibilityQuestionActive(formData: FormData) {
  * runSeoAnalysis already has for the SEO crawl. No queue/worker/scheduling
  * is introduced here (see CLAUDE.md's explicit Delivery 1A scope).
  *
- * A missing OPENAI_API_KEY/OPENAI_MODEL is checked once, up front, and
- * recorded as a single failed run with a clear top-level error — rather
- * than attempting every question only to have each one fail identically,
- * which would just be N duplicate rows saying the same thing.
+ * Two entry points, one per acquisition method, so each UI button can only
+ * ever reach its own method (the method is never read from client input):
+ *   - runApiAiVisibilityAnalysis     — the configured provider's API
+ *   - runBrowserAiVisibilityAnalysis — Gemini web + ChatGPT web +
+ *                                      Perplexity web + Claude web via
+ *                                      browser automation (one result per
+ *                                      question per provider)
+ * Both share everything else below: the same active questions, the same
+ * metrics, the same run/result persistence, plus `execution_method`.
+ *
+ * A missing/incomplete configuration (OPENAI_API_KEY+OPENAI_MODEL, or
+ * GEMINI_API_KEY+GEMINI_MODEL when AI_VISIBILITY_PROVIDER=gemini — see
+ * providers/select.ts; AI_VISIBILITY_BROWSER_ENABLED for browser mode) is
+ * checked once, up front, and recorded as a single failed run with a clear
+ * top-level error — rather than attempting every question only to have
+ * each one fail identically, which would just be N duplicate rows saying
+ * the same thing.
  */
-export async function runAiVisibilityAnalysis(formData: FormData) {
+export async function runApiAiVisibilityAnalysis(formData: FormData) {
+  await runAiVisibilityAnalysis(formData, "api");
+}
+
+export async function runBrowserAiVisibilityAnalysis(formData: FormData) {
+  await runAiVisibilityAnalysis(formData, "browser");
+}
+
+/** Run-level provider/model and configuration state for a method. A
+ * Browser run spans all four consumer web apps, so its run row lists them
+ * ("gemini,openai,perplexity,anthropic") — each result row carries its own
+ * single provider/model.
+ * API mode follows AI_VISIBILITY_PROVIDER. */
+function resolveExecutionTarget(executionMethod: AiVisibilityExecutionMethod) {
+  if (executionMethod === "browser") {
+    return {
+      providerId: "gemini,openai,perplexity,anthropic",
+      model: `${GEMINI_WEB_MODEL},${CHATGPT_WEB_MODEL},${PERPLEXITY_WEB_MODEL},${CLAUDE_WEB_MODEL}`,
+      configurationError: isGeminiBrowserEnabled()
+        ? null
+        : "Browser AI Visibility is not enabled on this server: set AI_VISIBILITY_BROWSER_ENABLED=true on a host with Google Chrome installed (see .env.example).",
+    };
+  }
+  const providerId = getConfiguredAiVisibilityProvider();
+  const missingVars = providerId === "gemini" ? "GEMINI_API_KEY and GEMINI_MODEL" : "OPENAI_API_KEY and OPENAI_MODEL";
+  return {
+    providerId,
+    model: getAiVisibilityProviderModel(providerId),
+    configurationError: isAiVisibilityProviderConfigured(providerId)
+      ? null
+      : `AI Visibility is not configured: set ${missingVars} (see .env.example).`,
+  };
+}
+
+async function runAiVisibilityAnalysis(formData: FormData, executionMethod: AiVisibilityExecutionMethod) {
   const siteId = String(formData.get("siteId") ?? "").trim();
   if (!siteId) redirect("/dashboard");
 
@@ -155,7 +210,7 @@ export async function runAiVisibilityAnalysis(formData: FormData) {
   const site = await requireOwnedSite(supabase, organization.id, siteId);
   if (!site) redirect("/dashboard?error=site-not-found");
 
-  const model = process.env.OPENAI_MODEL ?? "unknown";
+  const { providerId, model, configurationError } = resolveExecutionTarget(executionMethod);
 
   const { data: questions, error: questionsError } = await supabase
     .from("ai_visibility_questions")
@@ -177,19 +232,20 @@ export async function runAiVisibilityAnalysis(formData: FormData) {
     redirect(`${siteAiVisibilityPath(site.slug)}?error=no-active-questions`);
   }
 
-  if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_MODEL) {
+  if (configurationError) {
     const { error: insertUnconfiguredRunError } = await supabase.from("ai_visibility_runs").insert({
       site_id: site.id,
       organization_id: organization.id,
       triggered_by: user.id,
       status: "failed",
-      provider: AI_VISIBILITY_PROVIDER,
+      provider: providerId,
       model,
+      execution_method: executionMethod,
       completed_at: new Date().toISOString(),
       question_count: 0,
       succeeded_count: 0,
       failed_count: 0,
-      error_message: "AI Visibility is not configured: set OPENAI_API_KEY and OPENAI_MODEL (see .env.example).",
+      error_message: configurationError,
     });
     if (insertUnconfiguredRunError) {
       console.error("[runAiVisibilityAnalysis] failed to record unconfigured run", {
@@ -207,8 +263,9 @@ export async function runAiVisibilityAnalysis(formData: FormData) {
       organization_id: organization.id,
       triggered_by: user.id,
       status: "running",
-      provider: AI_VISIBILITY_PROVIDER,
+      provider: providerId,
       model,
+      execution_method: executionMethod,
       question_count: questions.length,
     })
     .select("id")
@@ -227,6 +284,7 @@ export async function runAiVisibilityAnalysis(formData: FormData) {
     questions.map((q) => ({ id: q.id, questionText: q.question_text })),
     siteUrl,
     site.name,
+    executionMethod,
   );
 
   const resultsToInsert = outcomes.map((outcome) =>
@@ -238,6 +296,7 @@ export async function runAiVisibilityAnalysis(formData: FormData) {
           status: "completed",
           provider: outcome.provider,
           model: outcome.model,
+          execution_method: executionMethod,
           answer_text: outcome.answerText,
           sources: outcome.sources,
           mentioned: outcome.mentioned,
@@ -253,7 +312,9 @@ export async function runAiVisibilityAnalysis(formData: FormData) {
           status: "failed",
           provider: outcome.provider,
           model: outcome.model,
+          execution_method: executionMethod,
           error_message: outcome.errorMessage,
+          raw_response: outcome.raw ?? null,
         },
   );
 
@@ -282,16 +343,23 @@ export async function runAiVisibilityAnalysis(formData: FormData) {
     redirect(siteAiVisibilityPath(site.slug));
   }
 
-  const succeededCount = outcomes.filter((outcome) => outcome.status === "completed").length;
-  const failedCount = outcomes.length - succeededCount;
+  const completion = resolveAiVisibilityRunCompletion(outcomes);
+  // Web UI model labels (e.g. "gemini-web (Flash-Lite)") are only known
+  // once the browsers have loaded, after the run row was created.
+  const detectedBrowserModel =
+    executionMethod === "browser"
+      ? [...new Set(outcomes.filter((outcome) => outcome.status === "completed").map((outcome) => outcome.model))].join(",")
+      : undefined;
 
   const { error: completeError } = await supabase
     .from("ai_visibility_runs")
     .update({
-      status: "completed",
+      status: completion.status,
       completed_at: new Date().toISOString(),
-      succeeded_count: succeededCount,
-      failed_count: failedCount,
+      succeeded_count: completion.succeededCount,
+      failed_count: completion.failedCount,
+      error_message: completion.errorMessage,
+      ...(detectedBrowserModel ? { model: detectedBrowserModel } : {}),
     })
     .eq("id", run.id);
 
@@ -305,17 +373,22 @@ export async function runAiVisibilityAnalysis(formData: FormData) {
   redirect(siteAiVisibilityPath(site.slug));
 }
 
+/** One provider result as the run-detail modal shows it: KPIs and
+ * competitors only. The full answer and evidence are deliberately not sent
+ * here — they belong to the provider result detail page. */
 export type AiVisibilityResultDetail = {
   id: string;
   questionId: string;
   questionText: string;
   category: string | null;
+  provider: string;
+  model: string;
   status: string;
-  answerText: string | null;
-  sources: AiVisibilitySource[];
   mentioned: boolean | null;
   cited: boolean | null;
-  firstMentionIndex: number | null;
+  /** Null when the result failed (no fake KPI values). */
+  competitors: string[] | null;
+  sourceCount: number | null;
   errorMessage: string | null;
   createdAt: string;
 };
@@ -328,6 +401,7 @@ export type AiVisibilityRunDetailResult =
         status: string;
         provider: string;
         model: string;
+        executionMethod: string;
         startedAt: string;
         completedAt: string | null;
         errorMessage: string | null;
@@ -359,7 +433,7 @@ export async function getAiVisibilityRunDetail(
   const { data: run } = await supabase
     .from("ai_visibility_runs")
     .select(
-      "id, status, provider, model, started_at, completed_at, error_message, question_count, succeeded_count, failed_count",
+      "id, status, provider, model, execution_method, started_at, completed_at, error_message, question_count, succeeded_count, failed_count",
     )
     .eq("id", runId)
     .eq("site_id", siteId)
@@ -370,9 +444,16 @@ export async function getAiVisibilityRunDetail(
     return { ok: false, error: "That analysis could not be found." };
   }
 
+  const { data: site } = await supabase
+    .from("sites")
+    .select("name, url, effective_url")
+    .eq("id", siteId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const { data: results } = await supabase
     .from("ai_visibility_results")
-    .select("id, question_id, status, answer_text, sources, mentioned, cited, first_mention_index, error_message, created_at")
+    .select("id, question_id, provider, model, status, answer_text, sources, raw_response, mentioned, cited, error_message, created_at")
     .eq("run_id", run.id)
     .eq("organization_id", organization.id)
     .order("created_at", { ascending: true });
@@ -396,6 +477,7 @@ export async function getAiVisibilityRunDetail(
       status: run.status,
       provider: run.provider,
       model: run.model,
+      executionMethod: run.execution_method,
       startedAt: run.started_at,
       completedAt: run.completed_at,
       errorMessage: run.error_message,
@@ -403,19 +485,26 @@ export async function getAiVisibilityRunDetail(
       succeededCount: run.succeeded_count,
       failedCount: run.failed_count,
     },
-    results: (results ?? []).map((result) => ({
-      id: result.id,
-      questionId: result.question_id,
-      questionText: questionById.get(result.question_id)?.question_text ?? "(question no longer available)",
-      category: questionById.get(result.question_id)?.category ?? null,
-      status: result.status,
-      answerText: result.answer_text,
-      sources: (result.sources ?? []) as AiVisibilitySource[],
-      mentioned: result.mentioned,
-      cited: result.cited,
-      firstMentionIndex: result.first_mention_index,
-      errorMessage: result.error_message,
-      createdAt: result.created_at,
-    })),
+    results: (results ?? []).map((result) => {
+      const summary = summarizeAiVisibilityResult(result, {
+        brandName: site?.name ?? "",
+        siteUrl: site?.effective_url ?? site?.url ?? "",
+      });
+      return {
+        id: result.id,
+        questionId: result.question_id,
+        questionText: questionById.get(result.question_id)?.question_text ?? "(question no longer available)",
+        category: questionById.get(result.question_id)?.category ?? null,
+        provider: result.provider,
+        model: result.model,
+        status: result.status,
+        mentioned: result.mentioned,
+        cited: result.cited,
+        competitors: summary.competitors,
+        sourceCount: summary.sourceCount,
+        errorMessage: result.error_message,
+        createdAt: result.created_at,
+      };
+    }),
   };
 }

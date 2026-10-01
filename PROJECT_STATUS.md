@@ -1145,3 +1145,319 @@ entirely client-side over the question set the page was already loading.
 Bulk actions, drag-and-drop ordering, CSV import/export, AI-generated
 questions, question templates, and a managed category taxonomy remain
 out of scope, as in Delivery 1A. Categories remain free text.
+
+---
+
+## AI Visibility — Dual execution modes: API + Browser (Gemini)
+
+**Status: implemented; Browser acquisition verified live; API acquisition
+and DB persistence pending two external steps (see below).** A run can now
+acquire Gemini's answers two ways, so the results can be compared. The
+acquisition method is the only thing that differs: both ask the same
+active questions with the same text, and both feed the same `toOutcome`
+metrics (Mentioned/Cited/first mention) and the same run/result persistence.
+
+### What's implemented
+
+- **Two buttons** on `/dashboard/sites/[slug]/ai-visibility`:
+  "Run API AI Visibility analysis" and "Run Browser AI Visibility
+  analysis". Each is bound to its own Server Action
+  (`runApiAiVisibilityAnalysis` / `runBrowserAiVisibilityAnalysis` in
+  `actions.ts`). The method is never read from client input, and both
+  actions keep the existing tenant/site ownership checks.
+- **API mode**: unchanged provider path (`providers/select.ts` →
+  `providers/gemini.ts`; `AI_VISIBILITY_PROVIDER=gemini`).
+- **Browser mode** (`providers/geminiBrowser.ts`): `playwright-core`
+  drives the host's installed Google Chrome against gemini.google.com.
+  It uses one browser per run and a fresh tab/chat per question,
+  sequentially. It types the exact question text (and verifies it before
+  sending), waits until generation stops and the text is stable, then
+  captures the rendered answer. Citation-chip labels are hidden so they
+  don't count as mentions. Each citation chip is opened to collect its
+  source URL. The default is a fresh **signed-out** context (no
+  account, no personalization). `GEMINI_BROWSER_PROFILE_DIR` can point at
+  a manually signed-in Chrome profile instead. MARKO never automates a
+  Google login. Sign-in, consent and CAPTCHA pages are reported as
+  failures and never bypassed. One browser run per server process at a
+  time (an in-process lock). Off unless `AI_VISIBILITY_BROWSER_ENABLED=true`.
+  An unconfigured attempt records one failed run with a clear message.
+- **Persistence** (`supabase/migrations/0015_ai_visibility_execution_method.sql`):
+  `execution_method text not null default 'api'`, checked to `'api' |
+  'browser'`, on both `ai_visibility_runs` and `ai_visibility_results`.
+  The change is additive. Existing rows default to `'api'`, which is
+  correct because every earlier run was an API call. Browser
+  results use `provider = 'gemini'`, with `model` set to the web UI's mode label
+  (e.g. `gemini-web (Flash-Lite)`). `raw_response` holds the
+  conversation URL, signed-in state, capture time, citation links,
+  whether source extraction was complete, and the answer HTML (capped at 200 KB).
+  `usage` is null because the web UI exposes no usage data.
+- **UI**: an API/Browser badge on each history row and in the run detail
+  modal. The page intro copy now describes both modes.
+
+### Validation (2026-10-01)
+
+- `npm test` 396/396, including new browser orchestration, helper and
+  action tests. `npx tsc --noEmit`, `npx eslint` and `npm run build` are clean.
+  No secrets and no Playwright code appear in `.next/static`.
+- **Live Browser acquisition verified**: the real `runAiVisibility(…,
+  "browser")` produced a completed Gemini web answer (~35s, 3.2k chars, 2
+  sources from goodfirms.co/clutch.co, `gemini-web (Flash-Lite)`).
+- **Live API acquisition verified (later 2026-10-01, new Tier 1 key)**: 5
+  grounded questions on `gemini-3.1-flash-lite` all completed in ~12s
+  (28–46 sources each). An earlier 429 `RESOURCE_EXHAUSTED` ("exceeded your
+  current quota… check your plan and billing", no QuotaFailure details) was
+  transient: the same key, model and request succeed minutes later. The UI now
+  separates this quota/billing case from a plain rate limit, and every
+  failed result keeps Google's sanitized error (status, message,
+  quota/retry details, endpoint) in `raw_response`.
+- **Migration 0015**: applied by Alex after this delivery (the local
+  Supabase CLI login had no access to the MARKO project). Any other environment needs
+  it applied before this code is deployed, because the code
+  selects/inserts `execution_method`.
+
+### Deployment constraint
+
+Browser mode needs a long-lived Node process with Chrome, such as `next start`
+on a workstation, VM or container. It cannot run on serverless hosting. API
+mode is unaffected. `maxDuration = 180` isn't enforced by `next start`.
+A browser run takes roughly 20–40s per question.
+
+### Known limitations
+
+- Gemini web UI selectors (`rich-textarea`, `model-response`,
+  `message-content`, citation-chip aria-labels, the mode-picker button) can
+  change without notice. When they do, the failure is reported per question
+  ("prompt input not found", timeout) rather than producing wrong data.
+- Signed-out Gemini web may rate-limit or challenge repeated anonymous use.
+- The web UI answer is rendered text, not markdown, and has no
+  character offsets for citations. The API answer is markdown with offsets.
+  That is a real difference between the two surfaces, not normalized away.
+
+---
+
+## AI Visibility — Browser experiment: Gemini web + ChatGPT web
+
+**Status: implemented and verified live (2026-10-01).** This is an
+**experiment**: it evaluates whether browser automation of consumer AI
+chatbots can replace paid provider APIs for AI Visibility measurement. It is
+not a commitment that API and Browser modes will coexist permanently. Other
+AI web providers may be evaluated later; none are implemented.
+
+### What's implemented
+
+- **One Browser run asks both consumer apps**: every active question goes to
+  Gemini web (`providers/geminiBrowser.ts`, unchanged) and ChatGPT web
+  (`providers/chatgptBrowser.ts`, new) with the identical question text.
+  There is one browser per provider for the whole run. Questions are asked
+  one at a time, and both providers are asked in parallel for each question.
+  A provider that can't launch, or fails a question, only fails its own
+  results.
+- **ChatGPT web**: signed out, fresh context, and the cookie banner is
+  answered with "Reject non-essential". MARKO types the exact question,
+  verifies it, and clicks Send. It waits for the assistant message's
+  `data-message-complete` marker, no stop button, and stable text. It
+  captures the answer's markdown blocks (source chips hidden) and the
+  citation URLs from the chips' `data-assistant-sources-payload` JSON.
+  Evidence goes to `raw_response`: conversation URL, the source payloads,
+  and the answer HTML (capped at 200 KB). Model is `chatgpt-web`, because
+  the signed-out UI doesn't name the model. It runs in a **visible**
+  window by default: headless Chrome gets a Cloudflare verification page,
+  which is reported as a failure and never bypassed
+  (`CHATGPT_BROWSER_HEADLESS`).
+- **Persistence, no migration**: one `ai_visibility_results` row per
+  question per provider (`provider` = `gemini` or `openai`; the label is
+  "ChatGPT" for browser results). The Browser run row lists
+  `provider = 'gemini,openai'`, and its model becomes the detected web
+  labels on completion. Run status follows the existing convention: any
+  success → `completed`, all failed → `failed`. Counts are provider
+  results. When one provider failed every question, the run's
+  `error_message` names it (e.g. "ChatGPT: …").
+- **UI**: Browser history rows show per-provider counts ("Gemini 1/1 ·
+  ChatGPT 0/1 succeeded"). The run detail modal shows each question with
+  a separate section per provider: label, model, status, Mentioned/Cited,
+  answer and sources, or that provider's own failure.
+
+### Validation
+
+- `npm test` 410/410. `tsc`, `eslint` and `npm run build` are clean.
+  No Playwright code appears in client bundles.
+- **Live, through the real `runBrowserAiVisibilityAnalysis` action**
+  (auth and Supabase stubbed with a recorder): both providers completed
+  in 16s for "Which software development companies in Colombia should I
+  consider for a new digital product?". Gemini returned 3,075 chars and 5
+  sources; ChatGPT returned 3,409 chars and 7 sources. Two provider rows,
+  run `completed`.
+- **Real partial failure** (`CHATGPT_BROWSER_HEADLESS=true`): Gemini
+  completed, and ChatGPT failed with the Cloudflare message. The run was
+  `completed` 1/1, with "ChatGPT: …" as the run message.
+- **API mode regression** (same harness, real Gemini API): completed, 36
+  sources, `execution_method = 'api'`.
+
+### Known limitations
+
+- ChatGPT needs a visible Chrome window on the server host, so it is
+  workstation-only in practice.
+- Signed-out ChatGPT may rate-limit, require login, or show verification at
+  any time. These are reported per result.
+- ChatGPT DOM markers (`li[data-message-role]`, `data-assistant-markdown`,
+  `data-message-complete`, `data-assistant-sources-payload`) are
+  undocumented and may change.
+- Map/business cards that ChatGPT renders beside the markdown answer are
+  not part of the captured text. They are preserved in `answerHtml`.
+
+---
+
+## AI Visibility — Browser run summary: provider KPIs + competitors
+
+**Status: implemented (2026-10-01).** This is still part of the Browser-vs-API
+architecture experiment. The run detail modal is now a concise summary; full
+provider evidence lives on a separate page. Full Competitive Intelligence
+(configured competitors, scoring) and the remaining metrics (Recommended,
+Prominence, Accuracy, Sentiment) remain future, unimplemented work.
+
+- **Modal**: each question shows one card per provider (Gemini, ChatGPT;
+  one card for API runs). Each card has provider/model, status,
+  Mentioned/Cited (unchanged definitions), Competitors found, Sources
+  (unique URLs), the competitor list, and "View details". No full
+  answers are shown. A failed provider shows only its own safe error,
+  never placeholder KPIs.
+- **Competitors** (`src/lib/aiVisibility/competitors.ts`): deterministic,
+  with no AI call and no migration. They are derived at read time from the
+  evidence already stored with each result (`raw_response.answerHtml` for
+  Browser results, the markdown answer for API results), so historical
+  runs get the same treatment. Signals used:
+  - list items led by a bold name plus a separator ("**Leanware**
+    (Bogotá) – …");
+  - bold "Name:" items followed by a noun-phrase description (labels like
+    "Core Expertise: They …" are skipped);
+  - the first column of tables with a company-type header;
+  - Gemini business-card titles;
+  - ChatGPT company/local-business entities and the map businesses the
+    model chose (`isModelPreferred`).
+
+  Names are cleaned of listing taglines and category prefixes,
+  deduplicated (including shorter/longer forms), and the client (site
+  name or domain) is excluded. Anything unconfirmed is omitted.
+- **Provider detail page**:
+  `/dashboard/sites/[slug]/ai-visibility/results/[resultId]`. It shows
+  the question, run date, method, provider/model, status, Mentioned/Cited,
+  competitors, deduplicated sources, the full captured response, and an
+  allowlisted technical-evidence section. It is scoped to the caller's
+  organization and the site's own run. "Back" returns to AI Visibility
+  with that run's modal reopened (`?run=<id>`).
+- **ChatGPT capture fix** (small): company names rendered as link
+  references (e.g. in tables) are no longer hidden with the citation
+  chips, and the business map-card carousel no longer leaks into the
+  answer text. Results captured before this fix keep their stored text,
+  but competitor extraction reads their HTML, so they still list those
+  companies.
+- **Validation**: 426/426 tests; `tsc`, `eslint` and `build` clean. A real
+  Browser run went through the real action → modal data → detail loader.
+  Two provider cards, Mentioned/Cited No/No, competitor counts equal to the
+  unique names, source counts equal to unique URLs, no full answer in the
+  modal payload, and each detail returned only its own provider's answer.
+
+---
+
+## AI Visibility — Browser experiment: + Perplexity web
+
+**Status: implemented (2026-10-01). Perplexity is externally blocked when
+signed out.** A Browser run now asks every active question, with the
+identical text, to Gemini web, ChatGPT web and Perplexity web
+(`providers/perplexityBrowser.ts`). The purpose is unchanged: evaluating
+browser automation as an alternative to paid provider APIs. Claude and other
+providers are not implemented.
+
+- **Perplexity provider**:
+  - Real automation of www.perplexity.ai in a visible Chrome window. It
+    picks "Only necessary" cookies and verifies the typed question.
+  - It waits for the final answer inside `[data-workflow-final-text]`,
+    with no stop button and stable text. An echo of the question is never
+    accepted as an answer.
+  - Sources are the answer's external links, excluding Perplexity's own
+    hosts, deduplicated. Citation markers are hidden from the text.
+  - Model is `perplexity-web`. Provider id is `perplexity`, labelled
+    "Perplexity".
+  - An optional manually signed-in profile is supported via
+    `PERPLEXITY_BROWSER_PROFILE_DIR`.
+- **Observed access (signed out)**: Perplexity returned "Sign in to continue
+  using Perplexity" / "Sign up and repeat your request", or Cloudflare
+  verification. Headless Chrome is always challenged. Each case is recorded
+  as a safe Perplexity failure, while Gemini and ChatGPT complete normally.
+  No successful signed-out Perplexity answer has been captured yet, so
+  answer and source extraction are not yet validated against a real
+  Perplexity answer.
+- **Run/UI**: the run row lists `gemini,openai,perplexity`. The modal shows
+  three provider cards (1/2/3 columns, responsive). The provider detail page
+  and per-provider counts work for Perplexity like the others. No migration.
+- **Competitor extraction**: Perplexity-style inline citation links ("1",
+  "clutch.co", "clutch+2") are stripped before parsing. Added a rule for a
+  Gemini layout seen live: "**Name (City):**" heading a nested
+  "Best for / Overview" list. Earlier captures produce identical results.
+- **Validation**: 435/435 tests; `tsc`, `eslint` and `build` clean. Real
+  three-provider run through the real Browser action: Gemini and ChatGPT
+  completed, Perplexity failed with the sign-in message. The run was
+  `completed` 2/1, with "Perplexity: …" as the run message. Each provider's
+  detail returned only its own result. API mode was unchanged (real Gemini
+  API run).
+
+---
+
+## AI Visibility — Browser experiment: + Claude web (four providers)
+
+**Status: implemented (2026-10-01). Claude is externally blocked when signed
+out.** One Browser run now asks every active question, with the identical
+text, to Gemini web, ChatGPT web, Perplexity web and Claude web
+(`providers/claudeBrowser.ts`). This is still an architecture experiment
+comparing consumer browser automation with paid provider APIs. No other
+providers are implemented.
+
+**Observed access (signed out, real tests 2026-10-01):**
+
+| Provider | Visible Chrome | Headless Chrome |
+|---|---|---|
+| Gemini web | works | works |
+| ChatGPT web | works | Cloudflare verification |
+| Perplexity web | sign-in wall / Cloudflare | Cloudflare verification |
+| Claude web | Cloudflare, then redirect to claude.ai/login (no signed-out chat) | Cloudflare verification |
+
+- **Claude provider**:
+  - Fresh signed-out context, visible window by default
+    (`CLAUDE_BROWSER_HEADLESS`). No profile, no login automation.
+  - Sign-in redirects and Cloudflare are detected and recorded as a safe
+    Claude failure.
+  - The answer-capture path (ProseMirror input, `data-is-streaming="false"`
+    completion, stable text, question echo rejected, external links only,
+    claude.ai/anthropic hosts excluded) only runs if a chat is reachable.
+    It is **unvalidated against a real Claude answer** because none was
+    obtainable.
+  - Provider id is `anthropic`, labelled "Claude"; model is `claude-web`.
+- **Run/UI**: the run row lists `gemini,openai,perplexity,anthropic`. The
+  modal shows four provider cards in a 2×2 grid (stacking on narrow
+  screens). Detail pages and per-provider counts cover all four. No
+  migration.
+- **Real four-provider run** (real Browser action, Colombia question):
+  Gemini completed, ChatGPT completed, Perplexity failed (Cloudflare),
+  Claude failed (Cloudflare). The run was `completed` 2/2, and the message
+  names both failed providers. Each provider's detail returned only its own
+  row. API mode re-verified against the real Gemini API (one transient
+  Google 5xx, completed on retry).
+- **Validation**: 442/442 tests; `tsc`, `eslint` and `build` clean.
+  Competitor extraction is unchanged on all earlier real captures.
+
+---
+
+## Architecture experiment — remote headed Chrome under Xvfb (POC, not adopted)
+
+`poc/browser-xvfb/` is an isolated, removable feasibility probe. It runs
+MARKO's unmodified ChatGPT Browser provider once and measures the outcome,
+time and Chrome memory. Measured on macOS:
+
+- headed (visible) Chrome: completed in 16 s, ~1.2 GB;
+- headless: Cloudflare verification.
+
+The proposed mode (Linux x86-64 + Xvfb + headed Chrome) has **not been run
+yet**, because no Linux/Docker environment is available on the dev Mac. A
+Dockerfile and instructions are provided. The current app is unchanged: Browser
+runs still open Chrome windows on the machine running the MARKO server. Xvfb
+is **not** a selected architecture until mode C is tested.

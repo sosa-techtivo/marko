@@ -386,6 +386,7 @@ export type Database = {
           status: string;
           provider: string;
           model: string;
+          execution_method: string;
           started_at: string;
           completed_at: string | null;
           question_count: number;
@@ -401,6 +402,7 @@ export type Database = {
           status?: string;
           provider: string;
           model: string;
+          execution_method?: string;
           started_at?: string;
           completed_at?: string | null;
           question_count?: number;
@@ -416,6 +418,7 @@ export type Database = {
           status?: string;
           provider?: string;
           model?: string;
+          execution_method?: string;
           started_at?: string;
           completed_at?: string | null;
           question_count?: number;
@@ -449,6 +452,7 @@ export type Database = {
           status: string;
           provider: string;
           model: string;
+          execution_method: string;
           answer_text: string | null;
           sources: unknown;
           mentioned: boolean | null;
@@ -467,6 +471,7 @@ export type Database = {
           status: string;
           provider: string;
           model: string;
+          execution_method?: string;
           answer_text?: string | null;
           sources?: unknown;
           mentioned?: boolean | null;
@@ -485,6 +490,7 @@ export type Database = {
           status?: string;
           provider?: string;
           model?: string;
+          execution_method?: string;
           answer_text?: string | null;
           sources?: unknown;
           mentioned?: boolean | null;

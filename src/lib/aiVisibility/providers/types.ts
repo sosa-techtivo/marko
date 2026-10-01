@@ -21,7 +21,12 @@ export type AiVisibilitySource = {
   endIndex: number | null;
 };
 
-export type AiVisibilityProviderId = "openai";
+export type AiVisibilityProviderId = "openai" | "gemini" | "perplexity" | "anthropic";
+
+/** How a provider's answer was acquired — the provider's programmatic API,
+ * or real browser automation of its consumer web experience. Persisted as
+ * `execution_method` on runs/results (0015_ai_visibility_execution_method.sql). */
+export type AiVisibilityExecutionMethod = "api" | "browser";
 
 export type AiVisibilityProviderSuccess = {
   ok: true;
@@ -48,6 +53,10 @@ export type AiVisibilityProviderFailure = {
    * echo back request/account details (same posture as
    * googleSearchConsole/client.ts's describeGoogleApiError). */
   error: string;
+  /** Sanitized, secret-free provider error details (HTTP status, Google
+   * error status/message, quota/retry details) for development evidence —
+   * persisted as the failed result's raw_response, never shown in the UI. */
+  diagnostics?: Record<string, unknown>;
 };
 
 export type AiVisibilityProviderResult = AiVisibilityProviderSuccess | AiVisibilityProviderFailure;

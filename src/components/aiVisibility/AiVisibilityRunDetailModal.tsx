@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 import {
   getAiVisibilityRunDetail,
@@ -7,26 +8,15 @@ import {
   type AiVisibilityRunDetailResult,
 } from "@/app/dashboard/sites/[slug]/ai-visibility/actions";
 import { StatusBadge } from "@/components/seoReport/badges";
-
-/** Small tri-state badge for a nullable boolean metric — `null` renders as
- * a distinct "Not evaluated" state rather than being coerced into looking
- * like "No" (CLAUDE.md/this slice's explicit requirement: NULL must stay
- * distinguishable from a genuine negative result). */
-function MetricBadge({ label, value }: { label: string; value: boolean | null }) {
-  const colors =
-    value === true
-      ? "border-green-200 bg-green-50 text-green-700"
-      : value === false
-        ? "border-zinc-300 bg-zinc-100 text-zinc-600"
-        : "border-zinc-200 bg-zinc-50 text-zinc-400";
-  const text = value === true ? "Yes" : value === false ? "No" : "Not evaluated";
-
-  return (
-    <span className={`inline-block rounded-md border px-2 py-0.5 text-[11px] font-medium ${colors}`}>
-      {label}: {text}
-    </span>
-  );
-}
+import { ExecutionMethodBadge } from "./ExecutionMethodBadge";
+import { MetricBadge } from "./MetricBadge";
+import { aiVisibilityProviderLabel } from "@/lib/aiVisibility/providerLabels";
+import { siteAiVisibilityResultPath } from "@/lib/sites/paths";
+import {
+  formatProviderSummaries,
+  groupResultsByQuestion,
+  summarizeResultsByProvider,
+} from "@/lib/aiVisibility/runDetail";
 
 /** The three metrics this slice explicitly does not implement — shown as a
  * clearly-labelled "not yet measured" note so the UI never implies they
@@ -39,82 +29,131 @@ function DeferredMetricsNote() {
   );
 }
 
-function ResultCard({ result }: { result: AiVisibilityResultDetail }) {
+function KpiTile({ label, value }: { label: string; value: number }) {
   return (
-    <li className="rounded-md border border-zinc-200 p-3">
+    <div className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1">
+      <p className="text-sm font-semibold text-zinc-900">{value}</p>
+      <p className="text-[11px] text-zinc-500">{label}</p>
+    </div>
+  );
+}
+
+/** One provider's result as a compact KPI card — Mentioned/Cited,
+ * competitor and source counts, the competitor list, and a link to the
+ * provider result detail page. The full answer is never rendered here. A
+ * failed result shows only its own error, never placeholder KPIs. */
+function ProviderResultCard({
+  result,
+  executionMethod,
+  siteSlug,
+}: {
+  result: AiVisibilityResultDetail;
+  executionMethod: string;
+  siteSlug: string;
+}) {
+  const failed = result.status !== "completed";
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-zinc-200 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs font-medium text-zinc-900">{result.questionText}</p>
-          {result.category && (
-            <span className="mt-1 inline-block rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] font-medium text-zinc-500">
-              {result.category}
-            </span>
-          )}
+          <p className="text-sm font-semibold text-zinc-900">{aiVisibilityProviderLabel(result.provider, executionMethod)}</p>
+          <p className="truncate text-[11px] text-zinc-400">{result.model}</p>
         </div>
         <span
           className={`inline-block rounded-md border px-2 py-0.5 text-[11px] font-medium ${
-            result.status === "completed"
-              ? "border-green-200 bg-green-50 text-green-700"
-              : "border-red-200 bg-red-50 text-red-700"
+            failed ? "border-red-200 bg-red-50 text-red-700" : "border-green-200 bg-green-50 text-green-700"
           }`}
         >
-          {result.status === "completed" ? "Completed" : "Failed"}
+          {failed ? "Failed" : "Completed"}
         </span>
       </div>
 
-      {result.status === "failed" ? (
-        <p className="mt-2 text-xs text-red-600">{result.errorMessage ?? "This question could not be answered."}</p>
+      {failed ? (
+        <p className="text-xs text-red-600">{result.errorMessage ?? "This question could not be answered."}</p>
       ) : (
         <>
-          <div className="mt-2 flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
             <MetricBadge label="Mentioned" value={result.mentioned} />
             <MetricBadge label="Cited" value={result.cited} />
-            {result.firstMentionIndex !== null && (
-              <span className="inline-block rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] font-medium text-zinc-500">
-                First mention at character {result.firstMentionIndex}
-              </span>
-            )}
           </div>
-
-          <p className="mt-2 whitespace-pre-wrap text-xs text-zinc-700">{result.answerText}</p>
-
-          <div className="mt-2">
-            <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">
-              Sources ({result.sources.length})
-            </p>
-            {result.sources.length === 0 ? (
-              <p className="mt-1 text-[11px] text-zinc-400">No citation was returned for this answer.</p>
-            ) : (
-              <ul className="mt-1 flex flex-col gap-1">
-                {result.sources.map((source, index) => (
-                  <li key={`${source.url}-${index}`} className="truncate text-[11px]">
-                    <a
-                      href={source.url}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      className="text-primary-strong hover:underline"
-                    >
-                      {source.title ?? source.url}
-                    </a>
-                    {source.domain && <span className="ml-1 text-zinc-400">({source.domain})</span>}
+          <div className="grid grid-cols-2 gap-2">
+            <KpiTile label="Competitors found" value={result.competitors?.length ?? 0} />
+            <KpiTile label="Sources" value={result.sourceCount ?? 0} />
+          </div>
+          <div>
+            <p className="text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">Competitors</p>
+            {result.competitors && result.competitors.length > 0 ? (
+              <ul className="mt-1 flex flex-wrap gap-1">
+                {result.competitors.map((competitor) => (
+                  <li
+                    key={competitor}
+                    className="rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-700"
+                  >
+                    {competitor}
                   </li>
                 ))}
               </ul>
+            ) : (
+              <p className="mt-1 text-[11px] text-zinc-400">No competitor companies identified in this answer.</p>
             )}
           </div>
         </>
       )}
+
+      <Link
+        href={siteAiVisibilityResultPath(siteSlug, result.id)}
+        className="self-start text-xs font-medium text-primary-strong hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
+        View details →
+      </Link>
+    </div>
+  );
+}
+
+/** One question with each provider's result in its own card (one card for
+ * API runs; for Browser runs, Gemini/ChatGPT/Perplexity/Claude in a 2×2
+ * grid — four narrow columns would hurt readability — stacking on narrow
+ * screens). */
+function QuestionResultCard({
+  results,
+  executionMethod,
+  siteSlug,
+}: {
+  results: AiVisibilityResultDetail[];
+  executionMethod: string;
+  siteSlug: string;
+}) {
+  const first = results[0];
+  return (
+    <li className="rounded-md border border-zinc-200 p-3">
+      <p className="text-xs font-medium text-zinc-900">{first.questionText}</p>
+      {first.category && (
+        <span className="mt-1 inline-block rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] font-medium text-zinc-500">
+          {first.category}
+        </span>
+      )}
+      <div
+        className={`mt-3 grid grid-cols-1 gap-3 ${
+          results.length === 3 ? "md:grid-cols-2 lg:grid-cols-3" : results.length > 1 ? "md:grid-cols-2" : ""
+        }`}
+      >
+        {results.map((result) => (
+          <ProviderResultCard key={result.id} result={result} executionMethod={executionMethod} siteSlug={siteSlug} />
+        ))}
+      </div>
     </li>
   );
 }
 
 export function AiVisibilityRunDetailModal({
   siteId,
+  siteSlug,
   runId,
   startedAt,
   onClose,
 }: {
   siteId: string;
+  siteSlug: string;
   runId: string;
   startedAt: string;
   onClose: () => void;
@@ -160,6 +199,7 @@ export function AiVisibilityRunDetailModal({
             {result?.ok && (
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <StatusBadge status={result.run.status} />
+                <ExecutionMethodBadge method={result.run.executionMethod} />
                 <span className="text-[11px] text-zinc-500">
                   {result.run.provider} · {result.run.model}
                 </span>
@@ -197,13 +237,25 @@ export function AiVisibilityRunDetailModal({
                 </div>
                 <div>
                   <p className="text-xl font-semibold text-zinc-900">{result.run.succeededCount}</p>
-                  <p className="text-xs text-zinc-500">Succeeded</p>
+                  <p className="text-xs text-zinc-500">
+                    {result.run.executionMethod === "browser" ? "Provider results succeeded" : "Succeeded"}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xl font-semibold text-zinc-900">{result.run.failedCount}</p>
-                  <p className="text-xs text-zinc-500">Failed</p>
+                  <p className="text-xs text-zinc-500">
+                    {result.run.executionMethod === "browser" ? "Provider results failed" : "Failed"}
+                  </p>
                 </div>
               </div>
+
+              {result.run.executionMethod === "browser" && result.results.length > 0 && (
+                <p className="text-xs text-zinc-600">
+                  By provider:{" "}
+                  {formatProviderSummaries(summarizeResultsByProvider(result.results, result.run.executionMethod))}{" "}
+                  succeeded
+                </p>
+              )}
 
               <DeferredMetricsNote />
 
@@ -211,8 +263,13 @@ export function AiVisibilityRunDetailModal({
                 <p className="text-xs text-zinc-500">No results recorded for this run.</p>
               ) : (
                 <ul className="flex flex-col gap-2">
-                  {result.results.map((r) => (
-                    <ResultCard key={r.id} result={r} />
+                  {groupResultsByQuestion(result.results).map((group) => (
+                    <QuestionResultCard
+                      key={group.questionId}
+                      results={group.results}
+                      executionMethod={result.run.executionMethod}
+                      siteSlug={siteSlug}
+                    />
                   ))}
                 </ul>
               )}

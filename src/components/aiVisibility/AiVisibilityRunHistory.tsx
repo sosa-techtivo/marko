@@ -3,10 +3,15 @@
 import { useState } from "react";
 import { StatusBadge } from "@/components/seoReport/badges";
 import { AiVisibilityRunDetailModal } from "./AiVisibilityRunDetailModal";
+import { ExecutionMethodBadge } from "./ExecutionMethodBadge";
+import { formatProviderSummaries, type ProviderRunSummary } from "@/lib/aiVisibility/runDetail";
 
 export type AiVisibilityHistoryRun = {
   id: string;
   status: string;
+  executionMethod: string;
+  /** Per-provider counts — Browser runs only (empty for API runs). */
+  providerSummaries: ProviderRunSummary[];
   startedAt: string;
   questionCount: number;
   succeededCount: number;
@@ -24,7 +29,9 @@ function HistoryRow({
   onSelect: (() => void) | null;
 }) {
   const summary =
-    run.status === "completed"
+    run.status === "completed" && run.providerSummaries.length > 0
+      ? `${run.questionCount} question${run.questionCount === 1 ? "" : "s"} · ${formatProviderSummaries(run.providerSummaries)} succeeded`
+      : run.status === "completed"
       ? `${run.questionCount} question${run.questionCount === 1 ? "" : "s"} · ${run.succeededCount} succeeded · ${run.failedCount} failed`
       : run.status === "failed"
         ? (run.errorMessage ?? "Run failed")
@@ -35,6 +42,7 @@ function HistoryRow({
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5 truncate text-xs font-medium text-zinc-900">
           {new Date(run.startedAt).toLocaleString()}
+          <ExecutionMethodBadge method={run.executionMethod} />
           {isLatest && (
             <span className="inline-block shrink-0 rounded-md bg-primary-tint px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-primary-strong uppercase">
               Latest
@@ -73,8 +81,22 @@ function HistoryRow({
  * any run fetches its persisted results on demand, nothing is prefetched.
  * Multi-run trend comparison is explicitly out of scope for this slice —
  * this only ever lists runs and opens one at a time. */
-export function AiVisibilityRunHistory({ siteId, runs }: { siteId: string; runs: AiVisibilityHistoryRun[] }) {
-  const [openRun, setOpenRun] = useState<AiVisibilityHistoryRun | null>(null);
+export function AiVisibilityRunHistory({
+  siteId,
+  siteSlug,
+  runs,
+  initialOpenRunId = null,
+}: {
+  siteId: string;
+  siteSlug: string;
+  runs: AiVisibilityHistoryRun[];
+  /** Reopens a run's detail modal, e.g. when returning from a provider
+   * result detail page (?run=<id>). Ignored unless that run is listed. */
+  initialOpenRunId?: string | null;
+}) {
+  const [openRun, setOpenRun] = useState<AiVisibilityHistoryRun | null>(
+    () => runs.find((run) => run.id === initialOpenRunId && run.status !== "running") ?? null,
+  );
 
   if (runs.length === 0) {
     return <p className="text-xs text-zinc-500">No AI Visibility runs yet.</p>;
@@ -96,6 +118,7 @@ export function AiVisibilityRunHistory({ siteId, runs }: { siteId: string; runs:
       {openRun && (
         <AiVisibilityRunDetailModal
           siteId={siteId}
+          siteSlug={siteSlug}
           runId={openRun.id}
           startedAt={openRun.startedAt}
           onClose={() => setOpenRun(null)}
